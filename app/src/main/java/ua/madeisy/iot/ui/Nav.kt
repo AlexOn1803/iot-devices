@@ -6,6 +6,7 @@ sealed interface Screen {
     data class Edit(val key: String?) : Screen
     data object Settings : Screen
     data object Help : Screen
+    data object AddEsp : Screen
 }
 
 interface Nav {

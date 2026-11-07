@@ -20,7 +20,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -39,6 +42,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
@@ -49,12 +54,15 @@ import kotlinx.coroutines.launch
 import ua.madeisy.iot.IotApp
 import ua.madeisy.iot.data.DeviceConfig
 import ua.madeisy.iot.data.PlugState
+import ua.madeisy.iot.esp.EspState
 
 @Composable
 fun HomeScreen(nav: Nav) {
     val app = IotApp.instance
     val devices by app.storage.devices.collectAsState()
     val states by app.controller.states.collectAsState()
+    val espStates by app.controller.espStates.collectAsState()
+    var addChooser by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -70,7 +78,7 @@ fun HomeScreen(nav: Nav) {
         floatingActionButton = {
             if (devices.isNotEmpty()) {
                 ExtendedFloatingActionButton(
-                    onClick = { nav.push(Screen.Edit(null)) },
+                    onClick = { addChooser = true },
                     icon = { Icon(Icons.Filled.Add, null) },
                     text = { Text("Додати") },
                 )
@@ -87,7 +95,16 @@ fun HomeScreen(nav: Nav) {
             ) {
                 items(devices, key = { it.key }) { d ->
                     KeepConnected(d.key)
-                    DeviceCard(
+                    if (d.isEsp) EspCard(
+                        cfg = d,
+                        s = espStates[d.key] ?: EspState(),
+                        onClick = { nav.push(Screen.Device(d.key)) },
+                        onToggle = { on ->
+                            scope.launch {
+                                app.controller.setSwitch(d.key, on).onFailure { snackbar.showSnackbar(it.message ?: "Не вдалося") }
+                            }
+                        },
+                    ) else DeviceCard(
                         cfg = d,
                         s = states[d.key] ?: PlugState(),
                         onClick = { nav.push(Screen.Device(d.key)) },
@@ -101,6 +118,62 @@ fun HomeScreen(nav: Nav) {
                     )
                 }
             }
+        }
+    }
+    if (addChooser) AddChooser(nav) { addChooser = false }
+}
+
+@Composable
+private fun AddChooser(nav: Nav, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Що додаємо?") },
+        text = {
+            Column {
+                ListItem(
+                    headlineContent = { Text("Розетка Tuya / Smart Life") },
+                    supportingContent = { Text("Вручну або з хмари") },
+                    modifier = Modifier.clickable { onDismiss(); nav.push(Screen.Edit(null)) },
+                )
+                ListItem(
+                    headlineContent = { Text("Плата ESP32-C3") },
+                    supportingContent = { Text("Реле, датчики, світло — з прошивкою IoT Devices") },
+                    modifier = Modifier.clickable { onDismiss(); nav.push(Screen.AddEsp) },
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Скасувати") } },
+    )
+}
+
+@Composable
+private fun EspCard(cfg: DeviceConfig, s: EspState, onClick: () -> Unit, onToggle: (Boolean) -> Unit) {
+    val sum = IotApp.instance.controller.summary(cfg)
+    val p = s.primary
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = if (p?.on == true) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(cfg.name, style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    when { s.online -> "ESP32 · локально"; s.connecting -> "Підключення…"; else -> s.error ?: "Офлайн" },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (s.online || s.connecting) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                    maxLines = 2,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(sum.sub ?: sum.main, style = MaterialTheme.typography.headlineMedium)
+            }
+            if (p != null) Switch(
+                checked = p.on == true, onCheckedChange = onToggle, enabled = s.online,
+                colors = SwitchDefaults.colors(checkedTrackColor = OnGreen),
+            )
         }
     }
 }
@@ -155,7 +228,9 @@ private fun EmptyState(modifier: Modifier, nav: Nav) {
             Spacer(Modifier.height(24.dp))
             Button(onClick = { nav.push(Screen.Settings) }, modifier = Modifier.fillMaxWidth()) { Text("Імпорт з хмари Tuya") }
             Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = { nav.push(Screen.Edit(null)) }, modifier = Modifier.fillMaxWidth()) { Text("Додати вручну") }
+            OutlinedButton(onClick = { nav.push(Screen.Edit(null)) }, modifier = Modifier.fillMaxWidth()) { Text("Додати розетку вручну") }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = { nav.push(Screen.AddEsp) }, modifier = Modifier.fillMaxWidth()) { Text("Додати плату ESP32-C3") }
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { nav.push(Screen.Help) }, modifier = Modifier.fillMaxWidth()) { Text("Як отримати ключі") }
         }

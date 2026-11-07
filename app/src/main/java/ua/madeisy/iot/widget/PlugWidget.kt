@@ -29,7 +29,6 @@ import ua.madeisy.iot.MainActivity
 import ua.madeisy.iot.R
 import ua.madeisy.iot.data.DeviceConfig
 import ua.madeisy.iot.ui.AppTheme
-import ua.madeisy.iot.ui.formatPower
 
 /** Віджет на головний екран: назва, потужність, кнопка вкл/викл. */
 class PlugWidget : AppWidgetProvider() {
@@ -37,6 +36,35 @@ class PlugWidget : AppWidgetProvider() {
     companion object {
         private const val ACTION_TOGGLE = "ua.madeisy.iot.WIDGET_TOGGLE"
         private const val ACTION_REFRESH = "ua.madeisy.iot.WIDGET_REFRESH"
+        private const val ACTION_PERIODIC = "ua.madeisy.iot.WIDGET_PERIODIC"
+        private const val PERIOD_MS = 5 * 60 * 1000L
+
+        /**
+         * Тихе оновлення раз на ~5 хв, поки телефон не спить (ELAPSED_REALTIME без пробудження),
+         * щоб віджет був свіжим і без фонового моніторингу.
+         */
+        fun schedulePeriodic(ctx: Context) {
+            val am = ctx.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            am.setInexactRepeating(
+                android.app.AlarmManager.ELAPSED_REALTIME,
+                android.os.SystemClock.elapsedRealtime() + PERIOD_MS, PERIOD_MS, periodicIntent(ctx)
+            )
+        }
+
+        fun cancelPeriodic(ctx: Context) {
+            (ctx.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager).cancel(periodicIntent(ctx))
+        }
+
+        private fun periodicIntent(ctx: Context): PendingIntent = PendingIntent.getBroadcast(
+            ctx, 7001, Intent(ctx, PlugWidget::class.java).setAction(ACTION_PERIODIC),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        private fun widgetKeys(ctx: Context): List<String> {
+            val mgr = AppWidgetManager.getInstance(ctx)
+            return mgr.getAppWidgetIds(ComponentName(ctx, PlugWidget::class.java)).toList()
+                .mapNotNull { deviceFor(ctx, it)?.key }.distinct()
+        }
         private const val EXTRA_KEY = "deviceKey"
         private const val PREFS = "widgets"
 
@@ -67,30 +95,23 @@ class PlugWidget : AppWidgetProvider() {
                 mgr.updateAppWidget(id, views)
                 return
             }
-            val s = IotApp.instance.controller.state(dev.key)
+            val sum = IotApp.instance.controller.summary(dev)
             views.setTextViewText(R.id.w_name, dev.name)
-            views.setTextViewText(
-                R.id.w_power,
-                when {
-                    s.on == false -> "Вимк."
-                    s.powerW != null -> formatPower(s.powerW)
-                    else -> "—"
-                }
-            )
-            val fresh = System.currentTimeMillis() - s.updatedAt < 120_000
+            views.setTextViewText(R.id.w_power, sum.main)
+            val fresh = System.currentTimeMillis() - sum.updatedAt < 120_000
             views.setTextViewText(
                 R.id.w_status,
                 when {
                     busy -> "Зачекай…"
-                    s.updatedAt == 0L -> "Натисни ⟳ для оновлення"
-                    !fresh -> "Оновлено ${android.text.format.DateFormat.format("HH:mm", s.updatedAt)}"
-                    s.voltageV != null -> "%.0f В · %.2f А".format(s.voltageV, s.currentA ?: 0.0)
+                    sum.updatedAt == 0L -> "Натисни ⟳ для оновлення"
+                    !fresh -> "Оновлено ${android.text.format.DateFormat.format("HH:mm", sum.updatedAt)}"
+                    sum.sub != null -> sum.sub
                     else -> "Онлайн"
                 }
             )
             views.setImageViewResource(
                 R.id.w_toggle,
-                if (s.on == true) R.drawable.widget_btn_on else R.drawable.widget_btn_off
+                if (sum.on == true) R.drawable.widget_btn_on else R.drawable.widget_btn_off
             )
             views.setOnClickPendingIntent(R.id.w_toggle, action(ctx, ACTION_TOGGLE, dev.key, id))
             views.setOnClickPendingIntent(R.id.w_refresh, action(ctx, ACTION_REFRESH, dev.key, id))
@@ -119,7 +140,12 @@ class PlugWidget : AppWidgetProvider() {
         }
     }
 
+    override fun onEnabled(context: Context) { schedulePeriodic(context) }
+
+    override fun onDisabled(context: Context) { cancelPeriodic(context) }
+
     override fun onUpdate(context: Context, mgr: AppWidgetManager, ids: IntArray) {
+        schedulePeriodic(context)
         ids.forEach { render(context, mgr, it) }
         // тихо оновити дані, якщо застаріли
         val keys = ids.toList().mapNotNull { deviceFor(context, it)?.key }.distinct()
@@ -128,8 +154,9 @@ class PlugWidget : AppWidgetProvider() {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
                 keys.forEach { k ->
-                    val s = IotApp.instance.controller.state(k)
-                    if (System.currentTimeMillis() - s.updatedAt > 60_000) IotApp.instance.controller.refreshOnce(k)
+                    val dev = IotApp.instance.storage.device(k)
+                    val age = System.currentTimeMillis() - (dev?.let { IotApp.instance.controller.summary(it).updatedAt } ?: 0)
+                    if (age > 60_000) IotApp.instance.controller.refreshOnce(k)
                 }
                 withContext(Dispatchers.Main) { updateAll(context) }
             } finally { pending.finish() }
@@ -139,6 +166,25 @@ class PlugWidget : AppWidgetProvider() {
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
         val action = intent.action ?: return
+        if (action == ACTION_PERIODIC) {
+            val keys = widgetKeys(context)
+            if (keys.isEmpty()) { cancelPeriodic(context); return }
+            val pending = goAsync()
+            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                try {
+                    val c = IotApp.instance.controller
+                    keys.forEach { k ->
+                        val dev = IotApp.instance.storage.device(k)
+                        val age = System.currentTimeMillis() - (dev?.let { c.summary(it).updatedAt } ?: 0)
+                        if (age > 60_000) runCatching { c.refreshOnce(k) }
+                    }
+                } finally {
+                    withContext(Dispatchers.Main) { updateAll(context) }
+                    pending.finish()
+                }
+            }
+            return
+        }
         if (action != ACTION_TOGGLE && action != ACTION_REFRESH) return
         val key = intent.getStringExtra(EXTRA_KEY) ?: return
         val widgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1)

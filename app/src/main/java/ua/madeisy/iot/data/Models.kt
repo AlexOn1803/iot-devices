@@ -3,6 +3,10 @@ package ua.madeisy.iot.data
 import org.json.JSONObject
 import java.util.UUID
 
+enum class DeviceKind { TUYA, ESP;
+    companion object { fun parse(s: String?) = entries.firstOrNull { it.name == s } ?: TUYA }
+}
+
 enum class ConnectionMode(val label: String) {
     AUTO("Авто"), LOCAL("Лише локально"), CLOUD("Лише хмара");
 
@@ -74,7 +78,12 @@ data class DeviceConfig(
     val dps: DpMap = DpMap(),
     /** DP → хмарний код; заповнюється зі специфікації пристрою. */
     val cloudCodes: Map<Int, String> = emptyMap(),
+    val kind: DeviceKind = DeviceKind.TUYA,
+    /** Ключ доступу до плати ESP (X-Key). */
+    val apiKey: String = "",
 ) {
+    val isEsp: Boolean get() = kind == DeviceKind.ESP
+
     val canLocal: Boolean get() = deviceId.isNotBlank() && localKey.length == 16
     val canCloudId: Boolean get() = deviceId.isNotBlank()
 
@@ -90,6 +99,7 @@ data class DeviceConfig(
         .put("key", key).put("name", name).put("deviceId", deviceId).put("localKey", localKey)
         .put("ip", ip).put("version", version).put("mode", mode.name).put("dps", dps.toJson())
         .put("cloudCodes", JSONObject().apply { cloudCodes.forEach { (k, v) -> put(k.toString(), v) } })
+        .put("kind", kind.name).put("apiKey", apiKey)
 
     companion object {
         fun fromJson(j: JSONObject): DeviceConfig {
@@ -107,6 +117,8 @@ data class DeviceConfig(
                 mode = ConnectionMode.parse(j.optString("mode")),
                 dps = DpMap.fromJson(j.optJSONObject("dps")),
                 cloudCodes = codes,
+                kind = DeviceKind.parse(j.optString("kind")),
+                apiKey = j.optString("apiKey"),
             )
         }
     }

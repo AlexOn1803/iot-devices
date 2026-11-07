@@ -18,6 +18,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import ua.madeisy.iot.esp.EspClient
+import ua.madeisy.iot.esp.EspComp
+import ua.madeisy.iot.esp.EspDiscovery
+import ua.madeisy.iot.esp.EspHttpException
+import ua.madeisy.iot.esp.EspState
+import ua.madeisy.iot.esp.EspType
 import ua.madeisy.iot.tuya.DiscoveredDevice
 import ua.madeisy.iot.tuya.LocalEvent
 import ua.madeisy.iot.tuya.TuyaCloud
@@ -41,6 +48,26 @@ class PlugController(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val _states = MutableStateFlow<Map<String, PlugState>>(emptyMap())
     val states: StateFlow<Map<String, PlugState>> = _states
+
+    private val _esp = MutableStateFlow<Map<String, EspState>>(emptyMap())
+    val espStates: StateFlow<Map<String, EspState>> = _esp
+
+    fun espState(key: String): EspState = _esp.value[key] ?: EspState()
+
+    private fun espUpdate(key: String, f: (EspState) -> EspState) {
+        var important = false
+        _esp.update { m ->
+            val old = m[key] ?: EspState()
+            val new = f(old)
+            important = old.online != new.online || old.primary?.on != new.primary?.on
+            m + (key to new)
+        }
+        val now = System.currentTimeMillis()
+        if (important || now - (lastWidgetAt[key] ?: 0) >= 15_000) {
+            lastWidgetAt[key] = now
+            scope.launch(Dispatchers.Main) { runCatching { PlugWidget.updateAll(ctx) } }
+        }
+    }
 
     private val watchers = HashMap<String, Int>()
     private val jobs = HashMap<String, Job>()
@@ -94,7 +121,7 @@ class PlugController(
             val sample = Sample(now, if (s.on == false) 0.0 else p, s.voltageV, s.currentA)
             scope.launch(Dispatchers.IO) { runCatching { history.add(key, sample) } }
         }
-        if (important || now - (lastWidgetAt[key] ?: 0) >= 15_000) {
+        if (important || now - (lastWidgetAt[key] ?: 0) >= 10_000) {
             lastWidgetAt[key] = now
             scope.launch(Dispatchers.Main) { runCatching { PlugWidget.updateAll(ctx) } }
         }
@@ -127,14 +154,120 @@ class PlugController(
     }
 
     private fun start(key: String) {
-        jobs[key] = scope.launch { runLoop(key) }
+        val esp = storage.device(key)?.isEsp == true
+        jobs[key] = scope.launch { if (esp) runEspLoop(key) else runLoop(key) }
     }
 
     private fun stop(key: String) {
         jobs.remove(key)?.cancel()
         clients.remove(key)?.close()
-        update(key) { it.copy(source = Source.NONE, connecting = false) }
+        if (storage.device(key)?.isEsp == true) espUpdate(key) { it.copy(online = false, connecting = false) }
+        else update(key) { it.copy(source = Source.NONE, connecting = false) }
     }
+
+    // ---- ESP32 ----
+
+    private fun espClient(cfg: DeviceConfig) = EspClient(cfg.ip, cfg.apiKey)
+
+    private fun applyEspState(key: String, j: JSONObject) {
+        espUpdate(key) {
+            it.copy(
+                online = true, connecting = false, error = null,
+                comps = EspComp.listFromState(j),
+                rssi = j.optInt("rssi").takeIf { r -> r != 0 },
+                updatedAt = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    private suspend fun runEspLoop(key: String) {
+        var fails = 0
+        while (currentCoroutineContext().isActive) {
+            val cfg = storage.device(key) ?: return
+            if (cfg.ip.isBlank()) {
+                espRediscover(key)
+                if (storage.device(key)?.ip.isNullOrBlank()) {
+                    espUpdate(key) { it.copy(online = false, error = "Плату не знайдено в мережі") }
+                    delay(10_000); continue
+                }
+            }
+            if (!espState(key).online) espUpdate(key) { it.copy(connecting = true) }
+            try {
+                applyEspState(key, espClient(cfg).state())
+                fails = 0
+                delay(2000)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                fails++
+                espUpdate(key) { it.copy(online = false, connecting = false, error = e.message) }
+                if (e is EspHttpException && e.code == 401) { delay(15_000); continue }
+                if (fails == 3 || fails % 10 == 0) espRediscover(key)
+                delay(if (fails < 3) 2000 else 8000)
+            }
+        }
+    }
+
+    /** IP плати могла змінитися — шукаємо її за id через mDNS. */
+    private suspend fun espRediscover(key: String) {
+        val cfg = storage.device(key) ?: return
+        val found = runCatching { EspDiscovery.scan(ctx, 4000) }.getOrNull()
+            ?.firstOrNull { it.id == cfg.deviceId } ?: return
+        if (found.host != cfg.ip) storage.updateDevice(key) { it.copy(ip = found.host) }
+    }
+
+    /** Надіслати команди компонентам плати: напр. {"i":0,"on":true}. */
+    suspend fun espSet(key: String, vararg commands: JSONObject): Result<Unit> {
+        val cfg = storage.device(key) ?: return Result.failure(IOException("Пристрій не знайдено"))
+        return try {
+            applyEspState(key, espClient(cfg).set(commands.toList()))
+            Result.success(Unit)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Result.failure(e)
+        }
+    }
+
+    private suspend fun espSwitch(key: String, on: Boolean?): Result<Unit> {
+        var st = espState(key)
+        if (st.comps.isEmpty()) refreshOnce(key)
+        st = espState(key)
+        val p = st.primary ?: return Result.failure(IOException("На платі немає реле чи світла"))
+        val cmd = JSONObject().put("i", p.i)
+        if (on == null) cmd.put("toggle", true) else cmd.put("on", on)
+        return espSet(key, cmd)
+    }
+
+    /** Короткий опис стану для віджета і сповіщення. */
+    fun summary(cfg: DeviceConfig): Summary {
+        if (!cfg.isEsp) {
+            val s = state(cfg.key)
+            return Summary(
+                main = when { s.on == false -> "Вимк."; s.powerW != null -> ua.madeisy.iot.ui.formatPower(s.powerW); else -> "—" },
+                sub = s.voltageV?.let { String.format(java.util.Locale.US, "%.0f В · %.2f А", it, s.currentA ?: 0.0) },
+                on = s.on, online = s.online, updatedAt = s.updatedAt,
+            )
+        }
+        val s = espState(cfg.key)
+        val sensor = s.comps.firstOrNull { it.temp != null || it.pct != null }
+        val p = s.primary
+        val sensorText = sensor?.let { c ->
+            when {
+                c.temp != null -> String.format(java.util.Locale.US, "%.1f °C", c.temp) + (c.hum?.let { h -> " · ${h.toInt()} %" } ?: "")
+                else -> "${c.pct} %"
+            }
+        }
+        return Summary(
+            main = when {
+                sensorText != null && p == null -> sensorText
+                p != null -> if (p.on == true) "Увімк." else "Вимк."
+                else -> "—"
+            },
+            sub = if (p != null) sensorText else null,
+            on = p?.on, online = s.online, updatedAt = s.updatedAt,
+        )
+    }
+
+    data class Summary(val main: String, val sub: String?, val on: Boolean?, val online: Boolean, val updatedAt: Long)
 
     private suspend fun runLoop(key: String) {
         var localFails = 0
@@ -351,6 +484,7 @@ class PlugController(
 
     suspend fun setSwitch(key: String, on: Boolean): Result<Unit> {
         val cfg = storage.device(key) ?: return Result.failure(IOException("Пристрій не знайдено"))
+        if (cfg.isEsp) return espSwitch(key, on)
         return setDps(key, mapOf(cfg.dps.switch to on))
     }
 
@@ -368,6 +502,16 @@ class PlugController(
     /** Разове оновлення стану без постійного з'єднання (для віджета). */
     suspend fun refreshOnce(key: String): Result<PlugState> {
         val cfg = storage.device(key) ?: return Result.failure(IOException("Пристрій не знайдено"))
+        if (cfg.isEsp) {
+            return try {
+                applyEspState(key, espClient(cfg).state())
+                Result.success(PlugState())
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                espUpdate(key) { it.copy(online = false, error = e.message) }
+                Result.failure(e)
+            }
+        }
         clients[key]?.takeIf { it.connected }?.let { return Result.success(state(key)) }
         var lastError: Exception? = null
         if (cfg.mode != ConnectionMode.CLOUD && cfg.canLocal && cfg.ip.isNotBlank()) {
@@ -405,6 +549,7 @@ class PlugController(
 
     /** Перемикає стан; якщо поточний невідомий — спершу дізнається його. */
     suspend fun toggle(key: String): Result<Unit> {
+        if (storage.device(key)?.isEsp == true) return espSwitch(key, null)
         var s = state(key)
         if (s.on == null || System.currentTimeMillis() - s.updatedAt > 60_000) {
             refreshOnce(key).onSuccess { s = it }

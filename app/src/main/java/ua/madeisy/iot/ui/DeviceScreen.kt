@@ -283,7 +283,7 @@ private fun TimerCard(s: PlugState, onSet: (Int) -> Unit) {
 }
 
 @Composable
-private fun SchedulesCard(deviceKey: String) {
+internal fun SchedulesCard(deviceKey: String) {
     val app = IotApp.instance
     val ctx = LocalContext.current
     val all by app.storage.schedules.collectAsState()

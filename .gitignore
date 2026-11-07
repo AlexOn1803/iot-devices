@@ -8,3 +8,4 @@ captures/
 *.keystore
 *.jks
 !app/debug.keystore
+firmware/esp32c3/.pio/

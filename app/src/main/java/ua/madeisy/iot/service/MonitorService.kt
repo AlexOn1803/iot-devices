@@ -26,7 +26,6 @@ import kotlinx.coroutines.launch
 import ua.madeisy.iot.IotApp
 import ua.madeisy.iot.MainActivity
 import ua.madeisy.iot.R
-import ua.madeisy.iot.ui.formatPower
 
 object Notifications {
     const val CH_MONITOR = "monitor"
@@ -87,19 +86,15 @@ class MonitorService : Service() {
         }
         val app = IotApp.instance
         job = scope.launch {
-            app.storage.devices.combine(app.controller.states) { d, s -> d to s }
+            combine(app.storage.devices, app.controller.states, app.controller.espStates) { d, _, _ -> d }
                 .debounce(1000)
-                .collect { (devices, states) ->
+                .collect { devices ->
                     val keys = devices.map { it.key }.toSet()
                     (keys - held).forEach { app.controller.acquire(it); held += it }
                     (held - keys).toList().forEach { app.controller.release(it); held -= it }
                     val text = if (devices.isEmpty()) "Немає пристроїв" else devices.joinToString(" · ") { d ->
-                        val s = states[d.key]
-                        when {
-                            s == null || !s.online -> "${d.name}: офлайн"
-                            s.on == false -> "${d.name}: вимк."
-                            else -> "${d.name}: ${formatPower(s.powerW)}"
-                        }
+                        val s = app.controller.summary(d)
+                        if (!s.online) "${d.name}: офлайн" else "${d.name}: ${s.main}"
                     }
                     if (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(
                             this@MonitorService, Manifest.permission.POST_NOTIFICATIONS

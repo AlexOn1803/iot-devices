@@ -28,6 +28,9 @@ import ua.madeisy.iot.service.ScheduleManager
 import ua.madeisy.iot.ui.AppTheme
 import ua.madeisy.iot.ui.DeviceScreen
 import ua.madeisy.iot.ui.EditScreen
+import ua.madeisy.iot.ui.EspAddScreen
+import ua.madeisy.iot.ui.EspConfigScreen
+import ua.madeisy.iot.ui.EspDeviceScreen
 import ua.madeisy.iot.ui.HelpScreen
 import ua.madeisy.iot.ui.HomeScreen
 import ua.madeisy.iot.ui.Nav
@@ -83,7 +86,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppRoot(openDevice: String?, consumed: () -> Unit) {
     val stack = remember { mutableStateListOf<Screen>(Screen.Home) }
-    var restored by rememberSaveable { mutableStateOf(false) }
     val nav = remember {
         object : Nav {
             override fun push(s: Screen) { stack.add(s) }
@@ -101,7 +103,6 @@ private fun AppRoot(openDevice: String?, consumed: () -> Unit) {
         }
         consumed()
     }
-    LaunchedEffect(Unit) { restored = true }
     BackHandler(enabled = stack.size > 1) { nav.pop() }
 
     AnimatedContent(
@@ -111,8 +112,13 @@ private fun AppRoot(openDevice: String?, consumed: () -> Unit) {
     ) { screen ->
         when (screen) {
             Screen.Home -> HomeScreen(nav)
-            is Screen.Device -> DeviceScreen(screen.key, nav)
-            is Screen.Edit -> EditScreen(screen.key, nav)
+            is Screen.Device ->
+                if (IotApp.instance.storage.device(screen.key)?.isEsp == true) EspDeviceScreen(screen.key, nav)
+                else DeviceScreen(screen.key, nav)
+            is Screen.Edit ->
+                if (screen.key != null && IotApp.instance.storage.device(screen.key)?.isEsp == true) EspConfigScreen(screen.key, nav)
+                else EditScreen(screen.key, nav)
+            Screen.AddEsp -> EspAddScreen(nav)
             Screen.Settings -> SettingsScreen(nav)
             Screen.Help -> HelpScreen(nav)
         }
