@@ -54,6 +54,10 @@ jobs:
 
   firmware:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [esp32c3, esp32, esp32s3, esp32s2, esp8266, esp01]
     steps:
       - uses: actions/checkout@v4
 
@@ -66,32 +70,45 @@ jobs:
           path: |
             ~/.platformio
             ~/.cache/pip
-          key: pio-${{ hashFiles('firmware/esp32c3/platformio.ini') }}
+          key: pio-${{ matrix.board }}-${{ hashFiles('firmware/esp/platformio.ini') }}
 
       - name: Install PlatformIO
         run: pip install platformio esptool
 
-      - name: Build ESP32-C3 firmware
-        working-directory: firmware/esp32c3
+      - name: Build firmware
+        working-directory: firmware/esp
         env:
           FW_VERSION: 1.0.${{ github.run_number }}
-        run: pio run -e esp32c3
+        run: pio run -e ${{ matrix.board }}
 
-      - name: Merge into single flashable image
-        working-directory: firmware/esp32c3
+      - name: Make flashable images
+        working-directory: firmware/esp
         run: |
-          B=.pio/build/esp32c3
-          BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 -name boot_app0.bin | head -1)
-          python -m esptool --chip esp32c3 merge_bin -o ../../esp32c3-full.bin \
-            0x0 $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $B/firmware.bin
-          cp $B/firmware.bin ../../esp32c3-ota.bin
+          set -e
+          b=${{ matrix.board }}
+          B=.pio/build/$b
+          out=../../fw-$b
+          mkdir -p $out
+          case $b in
+            esp8266|esp01)
+              # для ESP8266 firmware.bin уже містить завантажувач і пишеться з адреси 0x0
+              cp $B/firmware.bin $out/iot-$b-full.bin ;;
+            *)
+              chip=$b; boot=0x1000
+              case $b in esp32c3|esp32s3) boot=0x0 ;; esac
+              BOOT_APP0=$(find ~/.platformio/packages/framework-arduinoespressif32 -name boot_app0.bin | head -1)
+              python -m esptool --chip $chip merge_bin -o $out/iot-$b-full.bin \
+                $boot $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $B/firmware.bin ;;
+          esac
+          cp $B/firmware.bin $out/iot-$b-ota.bin
+          # старі назви для плат, прошитих версією 1.0.5
+          if [ $b = esp32c3 ]; then cp $out/iot-$b-full.bin $out/esp32c3-full.bin; cp $out/iot-$b-ota.bin $out/esp32c3-ota.bin; fi
+          ls -la $out
 
       - uses: actions/upload-artifact@v4
         with:
-          name: firmware
-          path: |
-            esp32c3-full.bin
-            esp32c3-ota.bin
+          name: fw-${{ matrix.board }}
+          path: fw-${{ matrix.board }}/*.bin
 
   release:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -109,13 +126,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo '{"fw":"1.0.${{ github.run_number }}","app":"1.0.${{ github.run_number }}"}' > out/version.json
+          echo '{"fw":"1.0.${{ github.run_number }}","app":"1.0.${{ github.run_number }}","boards":["esp32c3","esp32","esp32s3","esp32s2","esp8266","esp01"]}' > out/version.json
+          ls -la out
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest out/iot-devices.apk out/esp32c3-full.bin out/esp32c3-ota.bin out/version.json \
+          gh release create latest out/*.apk out/*.bin out/version.json \
             --title "IoT Devices (збірка ${{ github.run_number }})" \
             --latest \
             --notes "Автоматична збірка з коміту ${{ github.sha }}.
 
           - **iot-devices.apk** — додаток для Android.
-          - **esp32c3-full.bin** — прошивка ESP32-C3 для першого запису по USB (адреса 0x0).
-          - **esp32c3-ota.bin** — та сама прошивка для оновлення по Wi-Fi."
+          - **iot-<плата>-full.bin** — прошивка для першого запису по USB з адреси 0x0 (додаток прошиває сам через USB-OTG).
+          - **iot-<плата>-ota.bin** — для оновлення по Wi-Fi.
+          - Плати: esp32c3, esp32, esp32s3, esp32s2, esp8266 (Wemos D1 mini, NodeMCU), esp01 (ESP-01/01S)."

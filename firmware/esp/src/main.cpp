@@ -1,21 +1,17 @@
-// IoT Devices — універсальна прошивка для ESP32-C3.
+// IoT Devices — універсальна прошивка для ESP8266 / ESP32 / S2 / S3 / C3.
 // Що підключено до яких пінів, задається JSON-конфігом з додатку (POST /api/config),
 // тож перепрошивати плату під кожен пристрій не треба.
 
-#include <Arduino.h>
-#include <WiFi.h>
-#include <WebServer.h>
+#include "platform.h"
 #include <DNSServer.h>
-#include <ESPmDNS.h>
-#include <Preferences.h>
-#include <Update.h>
 #include <Wire.h>
-#include <ArduinoJson.h>
 #include <Adafruit_NeoPixel.h>
 #include <DHT.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <Adafruit_AHTX0.h>
+#include <Adafruit_BME280.h>
+#include <Adafruit_BMP280.h>
 #include <vector>
 
 #include "web.h"
@@ -23,18 +19,20 @@
 #ifndef FW_VERSION
 #define FW_VERSION "dev"
 #endif
+#ifndef FW_BOARD
+#define FW_BOARD "unknown"
+#endif
 
 static const char* fwVersion() { return strlen(FW_VERSION) ? FW_VERSION : "dev"; }
 
-static const int BOOT_PIN = 9;          // кнопка BOOT на більшості плат C3
 static const uint32_t STA_TIMEOUT = 30000;
 
-WebServer server(80);
+WebServerT server(80);
 DNSServer dns;
-Preferences prefs;
+KV prefs;
 
 String deviceId;      // esp-xxxxxx
-String deviceName = "ESP32-C3";
+String deviceName;
 String apiKey;        // встановлюється додатком при першому підключенні (claim)
 String wifiSsid, wifiPass;
 bool apMode = false;
@@ -45,7 +43,7 @@ uint32_t restartAt = 0;
 
 // ---------------- компоненти ----------------
 
-enum CompType { C_RELAY, C_BUTTON, C_PWM, C_WS2812, C_DHT, C_DS18B20, C_AHT, C_ANALOG, C_INPUT, C_THERMO, C_UNKNOWN };
+enum CompType { C_RELAY, C_BUTTON, C_PWM, C_WS2812, C_DHT, C_DS18B20, C_AHT, C_ANALOG, C_INPUT, C_THERMO, C_BME, C_UNKNOWN };
 
 struct Comp {
   CompType type = C_UNKNOWN;
@@ -73,7 +71,9 @@ struct Comp {
   OneWire* ow = nullptr;
   DallasTemperature* ds = nullptr;
   Adafruit_AHTX0* aht = nullptr;
-  float temp = NAN, hum = NAN;
+  Adafruit_BME280* bme = nullptr;
+  Adafruit_BMP280* bmp = nullptr;
+  float temp = NAN, hum = NAN, pres = NAN;
   int raw = 0, minV = 0, maxV = 4095;
   bool active = false;
   bool pull = true;
@@ -102,10 +102,10 @@ CompType parseType(const String& t) {
   if (t == "analog") return C_ANALOG;
   if (t == "input") return C_INPUT;
   if (t == "thermo") return C_THERMO;
+  if (t == "bme") return C_BME;
   return C_UNKNOWN;
 }
 
-bool validPin(int p) { return (p >= 0 && p <= 10) || p == 20 || p == 21; }
 
 void saveRelayStates() {
   uint32_t mask = 0;
@@ -122,7 +122,7 @@ void applyPwm(Comp& c) {
   if (c.ledcCh < 0) return;
   int duty = c.on ? c.bri : 0;
   if (c.inv) duty = 255 - duty;
-  ledcWrite(c.ledcCh, duty);
+  pwmWrite(c.pin, c.ledcCh, duty);
 }
 
 uint32_t wheel(uint8_t pos) {
@@ -153,8 +153,8 @@ void applyStrip(Comp& c, uint32_t now = 0) {
 void freeComps() {
   for (auto& c : comps) {
     if (c.strip) { c.strip->clear(); c.strip->show(); delete c.strip; }
-    delete c.dht; delete c.ds; delete c.ow; delete c.aht;
-    if (c.ledcCh >= 0 && validPin(c.pin)) ledcDetachPin(c.pin);
+    delete c.dht; delete c.ds; delete c.ow; delete c.aht; delete c.bme; delete c.bmp;
+    if (c.ledcCh >= 0 && validPin(c.pin)) pwmDetach(c.pin);
   }
   comps.clear();
   nextLedc = 0;
@@ -165,6 +165,11 @@ void buildComps(JsonArrayConst arr) {
   freeComps();
   uint32_t relayMask = prefs.getUInt("rs", 0);
   bool wireStarted = false;
+  // усі I2C-датчики сидять на одній шині; піни беруться з першого такого компонента
+  auto startWire = [&](int sda, int scl) {
+    if (!wireStarted && validPin(sda) && validPin(scl)) { Wire.begin(sda, scl); wireStarted = true; }
+    return wireStarted;
+  };
   for (JsonObjectConst o : arr) {
     Comp c;
     c.typeName = o["t"] | "";
@@ -172,7 +177,7 @@ void buildComps(JsonArrayConst arr) {
     c.name = o["name"] | c.typeName;
     c.pin = o["pin"] | -1;
     c.pin2 = o["scl"] | -1;
-    if (c.type == C_AHT) { c.pin = o["sda"] | -1; }
+    if (c.type == C_AHT || c.type == C_BME) { c.pin = o["sda"] | -1; }
     c.inv = o["inv"] | false;
     size_t idx = comps.size();
     switch (c.type) {
@@ -189,11 +194,7 @@ void buildComps(JsonArrayConst arr) {
         c.lastLevel = validPin(c.pin) ? digitalRead(c.pin) : HIGH;
         break;
       case C_PWM:
-        if (validPin(c.pin) && nextLedc < 6) {
-          c.ledcCh = nextLedc++;
-          ledcSetup(c.ledcCh, 5000, 8);
-          ledcAttachPin(c.pin, c.ledcCh);
-        }
+        if (validPin(c.pin)) c.ledcCh = pwmAttach(c.pin, nextLedc);
         applyPwm(c);
         break;
       case C_WS2812:
@@ -219,16 +220,27 @@ void buildComps(JsonArrayConst arr) {
         }
         break;
       case C_AHT:
-        if (validPin(c.pin) && validPin(c.pin2) && !wireStarted) {
-          Wire.begin(c.pin, c.pin2);
-          wireStarted = true;
+        if (startWire(c.pin, c.pin2)) {
           c.aht = new Adafruit_AHTX0();
           if (!c.aht->begin(&Wire)) { delete c.aht; c.aht = nullptr; }
         }
         break;
+      case C_BME:
+        // BME280 (з вологістю) і BMP280 (без) продають під однією назвою — пробуємо обидва
+        if (startWire(c.pin, c.pin2)) {
+          for (uint8_t addr : {0x76, 0x77}) {
+            c.bme = new Adafruit_BME280();
+            if (c.bme->begin(addr, &Wire)) break;
+            delete c.bme; c.bme = nullptr;
+            c.bmp = new Adafruit_BMP280(&Wire);
+            if (c.bmp->begin(addr)) break;
+            delete c.bmp; c.bmp = nullptr;
+          }
+        }
+        break;
       case C_ANALOG:
         c.minV = o["min"] | 0;
-        c.maxV = o["max"] | 4095;
+        c.maxV = o["max"] | ADC_MAX;
         if (validPin(c.pin)) pinMode(c.pin, INPUT);
         break;
       case C_INPUT:
@@ -286,11 +298,19 @@ void readSensors(uint32_t now) {
           else { c.temp = NAN; c.hum = NAN; }
         }
         break;
+      case C_BME:
+        if (now - c.lastRead > 2000) {
+          c.lastRead = now;
+          if (c.bme) { c.temp = c.bme->readTemperature(); c.hum = c.bme->readHumidity(); c.pres = c.bme->readPressure() / 100.0f; }
+          else if (c.bmp) { c.temp = c.bmp->readTemperature(); c.pres = c.bmp->readPressure() / 100.0f; }
+          else { c.temp = NAN; c.hum = NAN; c.pres = NAN; }
+        }
+        break;
       case C_ANALOG:
         if (validPin(c.pin) && now - c.lastRead > 500) {
           c.lastRead = now;
           int v = 0;
-          for (int k = 0; k < 8; k++) v += analogRead(c.pin);
+          for (int k = 0; k < 8; k++) v += analogRead(pinForAnalog(c.pin));
           c.raw = v / 8;
         }
         break;
@@ -417,6 +437,12 @@ String stateJson() {
       case C_DS18B20:
         putNum(o, "temp", c.temp);
         break;
+      case C_BME:
+        putNum(o, "temp", c.temp);
+        if (c.bme) putNum(o, "hum", c.hum, 0);
+        putNum(o, "pres", c.pres, 1);
+        o["model"] = c.bme ? "BME280" : (c.bmp ? "BMP280" : "");
+        break;
       case C_ANALOG: {
         o["raw"] = c.raw;
         float span = c.maxV - c.minV;
@@ -458,7 +484,8 @@ String infoJson() {
   doc["ssid"] = wifiSsid;
   doc["claimed"] = apiKey.length() > 0;
   doc["ap"] = apMode;
-  doc["chip"] = ESP.getChipModel();
+  doc["chip"] = CHIP_NAME;
+  doc["board"] = FW_BOARD;
   String s;
   serializeJson(doc, s);
   return s;
@@ -558,7 +585,7 @@ void handleConfigPost() {
     prefs.putUInt("rs", 0);
     buildComps(cfg["comps"].as<JsonArrayConst>());
   }
-  MDNS.addServiceTxt("iotdev", "tcp", "name", deviceName);
+  MDNS.addServiceTxt("iotdev", "tcp", "name", deviceName.c_str());
   sendJson(200, stateJson());
 }
 
@@ -600,7 +627,7 @@ void handleScan() {
     for (JsonObject o : arr) if (s == (const char*)o["ssid"]) { dup = true; break; }
     if (dup) continue;
     JsonObject o = arr.add<JsonObject>();
-    o["ssid"] = s; o["rssi"] = WiFi.RSSI(i); o["open"] = WiFi.encryptionType(i) == WIFI_AUTH_OPEN;
+    o["ssid"] = s; o["rssi"] = WiFi.RSSI(i); o["open"] = WiFi.encryptionType(i) == WIFI_OPEN_AUTH;
   }
   WiFi.scanDelete();
   WiFi.scanNetworks(true);
@@ -648,7 +675,7 @@ void setupServer() {
       HTTPUpload& up = server.upload();
       if (up.status == UPLOAD_FILE_START) {
         otaAuthorized = authorized();
-        if (otaAuthorized) Update.begin(UPDATE_SIZE_UNKNOWN);
+        if (otaAuthorized) beginUpdate();
       } else if (up.status == UPLOAD_FILE_WRITE) {
         if (otaAuthorized) Update.write(up.buf, up.currentSize);
       } else if (up.status == UPLOAD_FILE_END) {
@@ -690,7 +717,7 @@ void stopAp() {
 
 void startSta() {
   WiFi.mode(WIFI_STA);
-  WiFi.setHostname(("iot-" + deviceId.substring(4)).c_str());
+  setHostName("iot-" + deviceId.substring(4));
   WiFi.begin(wifiSsid.c_str(), wifiPass.c_str());
   staStartedAt = millis();
 }
@@ -702,9 +729,10 @@ void startMdns() {
   String host = "iot-" + deviceId.substring(4);
   if (MDNS.begin(host.c_str())) {
     MDNS.addService("iotdev", "tcp", 80);
-    MDNS.addServiceTxt("iotdev", "tcp", "id", deviceId);
-    MDNS.addServiceTxt("iotdev", "tcp", "name", deviceName);
+    MDNS.addServiceTxt("iotdev", "tcp", "id", deviceId.c_str());
+    MDNS.addServiceTxt("iotdev", "tcp", "name", deviceName.c_str());
     MDNS.addServiceTxt("iotdev", "tcp", "fw", fwVersion());
+    MDNS.addServiceTxt("iotdev", "tcp", "chip", String(CHIP_NAME).c_str());
     mdnsStarted = true;
   }
 }
@@ -720,6 +748,9 @@ void factoryReset() {
 
 void setup() {
   Serial.begin(115200);
+#if ARDUINO_USB_CDC_ON_BOOT && !defined(ESP8266)
+  Serial0.begin(115200);
+#endif
   delay(100);
   pinMode(BOOT_PIN, INPUT_PULLUP);
 
@@ -729,7 +760,8 @@ void setup() {
   snprintf(buf, sizeof(buf), "esp-%02x%02x%02x", mac[3], mac[4], mac[5]);
   deviceId = buf;
 
-  prefs.begin("iot", false);
+  prefs.begin();
+  deviceName = prefs.getString("name", String("IoT ") + CHIP_NAME);
   wifiSsid = prefs.getString("ssid", "");
   wifiPass = prefs.getString("pass", "");
   apiKey = prefs.getString("key", "");
@@ -739,9 +771,58 @@ void setup() {
   if (wifiSsid.isEmpty()) startAp();
   else startSta();
   Serial.printf("IoT Devices %s, id %s\n", fwVersion(), deviceId.c_str());
+  Serial.print("IOTDEV "); Serial.println(infoJson());
 }
 
 uint32_t bootPressedAt = 0;
+
+bool pinUsed(int p) {
+  for (auto& c : comps) if (c.pin == p || (c.type == C_AHT || c.type == C_BME ? c.pin2 == p : false)) return true;
+  return false;
+}
+
+/**
+ * Команди через USB/UART (115200): додаток після прошивки передає Wi-Fi тим самим кабелем.
+ *   INFO                      -> IOTDEV {"id":...}
+ *   WIFI {"ssid":"..","pass":".."} -> IOTDEV-OK wifi
+ */
+struct SerialPort { Stream* s; String buf; };
+
+void handleSerialLine(Stream& out, String line) {
+  line.trim();
+  if (line == "INFO") {
+    out.print("IOTDEV "); out.println(infoJson());
+  } else if (line.startsWith("WIFI ")) {
+    JsonDocument d;
+    if (!deserializeJson(d, line.substring(5)) && d["ssid"].is<const char*>()) {
+      prefs.putString("ssid", (const char*)d["ssid"]);
+      prefs.putString("pass", (const char*)(d["pass"] | ""));
+      out.println("IOTDEV-OK wifi");
+      out.flush();
+      scheduleRestart(500);
+    } else {
+      out.println("IOTDEV-ERR bad wifi json");
+    }
+  }
+}
+
+#if ARDUINO_USB_CDC_ON_BOOT && !defined(ESP8266)
+SerialPort ports[] = {{&Serial, ""}, {&Serial0, ""}};   // нативний USB і UART0 (якщо на платі є USB-UART міст)
+#else
+SerialPort ports[] = {{&Serial, ""}};
+#endif
+
+void handleSerial() {
+  for (auto& p : ports) {
+    while (p.s->available()) {
+      char ch = (char)p.s->read();
+      if (ch == '\r') continue;
+      if (ch != '\n') { if (p.buf.length() < 512) p.buf += ch; continue; }
+      String line = p.buf; p.buf = "";
+      handleSerialLine(*p.s, line);
+    }
+  }
+}
 
 void loop() {
   uint32_t now = millis();
@@ -760,8 +841,13 @@ void loop() {
     }
   }
 
-  // утримання BOOT 5 с — скидання до заводських налаштувань
-  if (digitalRead(BOOT_PIN) == LOW) {
+#if defined(ESP8266)
+  MDNS.update();
+#endif
+  handleSerial();
+
+  // утримання BOOT 5 с — скидання до заводських налаштувань (якщо пін не зайнятий компонентом)
+  if (!pinUsed(BOOT_PIN) && digitalRead(BOOT_PIN) == LOW) {
     if (!bootPressedAt) bootPressedAt = now;
     else if (now - bootPressedAt > 5000) factoryReset();
   } else bootPressedAt = 0;
