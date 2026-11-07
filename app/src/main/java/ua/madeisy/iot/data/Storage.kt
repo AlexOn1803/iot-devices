@@ -80,12 +80,12 @@ class Storage(context: Context) {
     }
 
     private fun loadSettings() = AppSettings(
-        tariff = prefs.getFloat("tariff", 4.32f).toDouble(),
+        tariff = (prefs.getString("tariffS", null)?.toDoubleOrNull()) ?: Math.round(prefs.getFloat("tariff", 4.32f) * 100.0) / 100.0,
         backgroundMonitor = prefs.getBoolean("bgMonitor", false),
     )
 
     fun saveSettings(s: AppSettings) {
-        prefs.edit().putFloat("tariff", s.tariff.toFloat()).putBoolean("bgMonitor", s.backgroundMonitor).apply()
+        prefs.edit().putString("tariffS", s.tariff.toString()).putBoolean("bgMonitor", s.backgroundMonitor).apply()
         _settings.value = s
     }
 
