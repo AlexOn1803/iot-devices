@@ -122,7 +122,7 @@ class PlugWidget : AppWidgetProvider() {
     override fun onUpdate(context: Context, mgr: AppWidgetManager, ids: IntArray) {
         ids.forEach { render(context, mgr, it) }
         // тихо оновити дані, якщо застаріли
-        val keys = ids.mapNotNull { deviceFor(context, it)?.key }.distinct()
+        val keys = ids.toList().mapNotNull { deviceFor(context, it)?.key }.distinct()
         if (keys.isEmpty()) return
         val pending = goAsync()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
