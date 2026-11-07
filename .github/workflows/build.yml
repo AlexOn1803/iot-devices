@@ -100,7 +100,12 @@ jobs:
               python -m esptool --chip $chip merge_bin -o $out/iot-$b-full.bin \
                 $boot $B/bootloader.bin 0x8000 $B/partitions.bin 0xe000 "$BOOT_APP0" 0x10000 $B/firmware.bin ;;
           esac
-          cp $B/firmware.bin $out/iot-$b-ota.bin
+          if [ $b = esp01 ]; then
+            # на 1 МБ флешу оновлення вміщується лише стиснутим — ядро ESP8266 розпаковує .gz саме
+            gzip -9 -n -c $B/firmware.bin > $out/iot-$b-ota.bin
+          else
+            cp $B/firmware.bin $out/iot-$b-ota.bin
+          fi
           # старі назви для плат, прошитих версією 1.0.5
           if [ $b = esp32c3 ]; then cp $out/iot-$b-full.bin $out/esp32c3-full.bin; cp $out/iot-$b-ota.bin $out/esp32c3-ota.bin; fi
           ls -la $out

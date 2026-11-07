@@ -195,8 +195,9 @@ object EspUpdater {
                     }
                 }
             }
-            // образ ESP завжди починається з магічного байта 0xE9
-            if (out.length() < 100_000 || out.inputStream().use { it.read() } != 0xE9) throw IOException("Завантажений файл не схожий на прошивку")
+            // образ ESP починається з 0xE9; для ESP-01 — стиснутий gzip (1F 8B), його розпаковує сама плата
+            val magic = out.inputStream().use { it.read() }
+            if (out.length() < 100_000 || (magic != 0xE9 && magic != 0x1F)) throw IOException("Завантажений файл не схожий на прошивку")
             out
         } finally { conn.disconnect() }
     }
