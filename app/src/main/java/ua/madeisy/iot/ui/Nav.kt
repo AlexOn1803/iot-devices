@@ -8,6 +8,7 @@ sealed interface Screen {
     data object Help : Screen
     data object AddEsp : Screen
     data object Thermostats : Screen
+    data object Flash : Screen
 }
 
 interface Nav {

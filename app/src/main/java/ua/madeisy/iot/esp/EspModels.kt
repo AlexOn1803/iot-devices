@@ -15,12 +15,13 @@ enum class EspType(val code: String, val label: String, val hint: String) {
     ANALOG("analog", "Аналоговий вхід", "Напр. датчик вологості ґрунту (GPIO0–4)"),
     INPUT("input", "Цифровий вхід", "Датчик руху, геркон дверей"),
     THERMO("thermo", "Термостат", "Датчик цієї плати керує її реле — працює без телефона"),
+    BME("bme", "BME280/BMP280", "Температура, вологість, тиск (I2C)"),
     UNKNOWN("?", "Невідомо", "");
 
     companion object {
         fun parse(s: String?) = entries.firstOrNull { it.code == s } ?: UNKNOWN
-        val addable = listOf(RELAY, BUTTON, PWM, WS2812, DHT, DS18B20, AHT, ANALOG, INPUT, THERMO)
-        val tempSensors = setOf(DHT, DS18B20, AHT)
+        val addable = listOf(RELAY, BUTTON, PWM, WS2812, DHT, DS18B20, AHT, BME, ANALOG, INPUT, THERMO)
+        val tempSensors = setOf(DHT, DS18B20, AHT, BME)
     }
 }
 
@@ -57,7 +58,7 @@ data class EspCompConfig(
             EspType.WS2812 -> o.put("pin", pin).put("count", count)
             EspType.DHT -> o.put("pin", pin).put("model", model)
             EspType.DS18B20 -> o.put("pin", pin)
-            EspType.AHT -> o.put("sda", sda).put("scl", scl)
+            EspType.AHT, EspType.BME -> o.put("sda", sda).put("scl", scl)
             EspType.ANALOG -> o.put("pin", pin).put("inv", inv).put("min", min).put("max", max)
             EspType.INPUT -> o.put("pin", pin).put("inv", inv).put("pull", pull)
             EspType.THERMO -> o.put("sensor", sensor).put("target", target).put("mode", if (heat) "heat" else "cool")
@@ -69,7 +70,7 @@ data class EspCompConfig(
 
     /** Піни, які займає компонент. */
     val pins: List<Int> get() = when (type) {
-        EspType.AHT -> listOf(sda, scl)
+        EspType.AHT, EspType.BME -> listOf(sda, scl)
         EspType.THERMO -> emptyList()
         else -> listOf(pin)
     }
@@ -99,17 +100,45 @@ data class EspCompConfig(
         fun listToJson(name: String, list: List<EspCompConfig>): JSONObject =
             JSONObject().put("name", name).put("comps", JSONArray().apply { list.forEach { put(it.toJson()) } })
 
-        /** Піни ESP32-C3, доступні для компонентів, з підказками. */
-        val PINS = listOf(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21)
+        /** Піни, доступні для компонентів на кожній платі. */
+        fun pinsFor(board: String): List<Int> = when (board) {
+            "esp8266" -> listOf(16, 5, 4, 0, 2, 14, 12, 13, 15, 3, 1, 17)
+            "esp01" -> listOf(0, 2, 3, 1)
+            "esp32" -> listOf(2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33, 34, 35, 36, 39, 0)
+            "esp32s2" -> (1..18).toList() + listOf(21) + (33..40).toList() + listOf(0)
+            "esp32s3" -> (1..18).toList() + listOf(21) + (35..48).toList() + listOf(0)
+            else -> listOf(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 21)   // esp32c3
+        }
 
-        fun pinHint(p: Int): String? = when (p) {
-            2 -> "ADC, strap"
-            in 0..4 -> "ADC"
-            8 -> "LED на платі"
-            9 -> "BOOT"
-            20 -> "RX"
-            21 -> "TX"
-            else -> null
+        fun analogPins(board: String): List<Int> = when (board) {
+            "esp8266", "esp01" -> listOf(17)
+            "esp32" -> listOf(32, 33, 34, 35, 36, 39)
+            "esp32s2", "esp32s3" -> (1..10).toList()
+            else -> listOf(0, 1, 2, 3, 4)
+        }
+
+        fun adcMax(board: String) = if (board == "esp8266" || board == "esp01") 1023 else 4095
+
+        private val D1_LABELS = mapOf(16 to "D0", 5 to "D1", 4 to "D2", 0 to "D3", 2 to "D4", 14 to "D5", 12 to "D6", 13 to "D7", 15 to "D8", 3 to "RX", 1 to "TX", 17 to "A0")
+
+        fun pinLabel(p: Int, board: String): String =
+            if (board == "esp8266" && D1_LABELS.containsKey(p)) "${D1_LABELS[p]} (GPIO $p)"
+            else if (board == "esp01" || board == "esp8266") (if (p == 17) "A0" else "GPIO $p") else "GPIO $p"
+
+        fun pinHint(p: Int, board: String = "esp32c3"): String? = when (board) {
+            "esp8266" -> when (p) { 0 -> "FLASH, strap"; 2 -> "LED, strap"; 15 -> "strap, до GND"; 16 -> "без PWM/I2C"; 1, 3 -> "UART"; 17 -> "аналог 0–1 В"; else -> null }
+            "esp01" -> when (p) { 0 -> "реле на ESP-01S, strap"; 2 -> "strap"; 1 -> "TX"; 3 -> "RX"; else -> null }
+            "esp32" -> when (p) { 0 -> "BOOT"; 2 -> "LED, strap"; 12 -> "strap"; 15 -> "strap"; in 34..39 -> "лише вхід"; else -> null }
+            "esp32s2", "esp32s3" -> when (p) { 0 -> "BOOT"; in 1..10 -> "ADC"; 45, 46 -> "strap"; else -> null }
+            else -> when (p) {
+                2 -> "ADC, strap"
+                in 0..4 -> "ADC"
+                8 -> "LED на платі"
+                9 -> "BOOT"
+                20 -> "RX"
+                21 -> "TX"
+                else -> null
+            }
         }
     }
 }
@@ -136,6 +165,8 @@ data class EspComp(
     val thermoState: String? = null,
     val sensor: Int = -1,
     val target: Int = -1,
+    val pres: Double? = null,
+    val model: String? = null,
 ) {
     val isSwitchable: Boolean get() = type == EspType.RELAY || type == EspType.PWM || type == EspType.WS2812
 
@@ -158,6 +189,7 @@ data class EspComp(
                 onAt = o.optDoubleOrNull("onAt"), offAt = o.optDoubleOrNull("offAt"),
                 thermoState = o.optString("state").ifEmpty { null },
                 sensor = o.optInt("sensor", -1), target = o.optInt("target", -1),
+                pres = o.optDoubleOrNull("pres"), model = o.optString("model").ifEmpty { null },
             )
         }
 
@@ -175,11 +207,15 @@ data class EspInfo(
     val ip: String,
     val rssi: Int,
     val claimed: Boolean,
+    val chip: String = "",
+    /** Тип збірки прошивки: esp32c3, esp32, esp32s3, esp32s2, esp8266, esp01. */
+    val board: String = "",
 ) {
     companion object {
         fun fromJson(o: JSONObject) = EspInfo(
             id = o.optString("id"), name = o.optString("name"), fw = o.optString("fw"),
             ip = o.optString("ip"), rssi = o.optInt("rssi"), claimed = o.optBoolean("claimed"),
+            chip = o.optString("chip"), board = o.optString("board"),
         )
     }
 }

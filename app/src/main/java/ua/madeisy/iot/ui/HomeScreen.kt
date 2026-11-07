@@ -138,9 +138,14 @@ private fun AddChooser(nav: Nav, onDismiss: () -> Unit) {
                     modifier = Modifier.clickable { onDismiss(); nav.push(Screen.Edit(null)) },
                 )
                 ListItem(
-                    headlineContent = { Text("Плата ESP32-C3") },
-                    supportingContent = { Text("Реле, датчики, світло — з прошивкою IoT Devices") },
+                    headlineContent = { Text("Плата ESP (вже прошита)") },
+                    supportingContent = { Text("ESP8266 / ESP32 / S2 / S3 / C3 з прошивкою IoT Devices") },
                     modifier = Modifier.clickable { onDismiss(); nav.push(Screen.AddEsp) },
+                )
+                ListItem(
+                    headlineContent = { Text("Прошити нову плату через USB") },
+                    supportingContent = { Text("З телефона через OTG-кабель") },
+                    modifier = Modifier.clickable { onDismiss(); nav.push(Screen.Flash) },
                 )
             }
         },
@@ -232,7 +237,7 @@ private fun EmptyState(modifier: Modifier, nav: Nav) {
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { nav.push(Screen.Edit(null)) }, modifier = Modifier.fillMaxWidth()) { Text("Додати розетку вручну") }
             Spacer(Modifier.height(8.dp))
-            OutlinedButton(onClick = { nav.push(Screen.AddEsp) }, modifier = Modifier.fillMaxWidth()) { Text("Додати плату ESP32-C3") }
+            OutlinedButton(onClick = { nav.push(Screen.Flash) }, modifier = Modifier.fillMaxWidth()) { Text("Прошити плату ESP через USB") }
             Spacer(Modifier.height(8.dp))
             OutlinedButton(onClick = { nav.push(Screen.Help) }, modifier = Modifier.fillMaxWidth()) { Text("Як отримати ключі") }
         }

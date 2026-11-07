@@ -185,7 +185,7 @@ private fun ThermostatDialog(initial: Thermostat, isNew: Boolean, onDismiss: () 
     // датчики: компоненти з температурою на платах ESP (з поточного стану)
     val sensors = devices.filter { it.isEsp }.flatMap { d ->
         (esp[d.key]?.comps ?: emptyList())
-            .filter { it.type == EspType.DHT || it.type == EspType.AHT || it.type == EspType.DS18B20 }
+            .filter { it.type in EspType.tempSensors }
             .map { SensorOption(d.key, it.i, "${d.name} · ${it.name}" + (it.temp?.let { v -> String.format(Locale.US, " (%.1f °C)", v) } ?: "")) }
     }
     val targets = devices

@@ -31,6 +31,7 @@ import ua.madeisy.iot.ui.AppTheme
 import ua.madeisy.iot.ui.DeviceScreen
 import ua.madeisy.iot.ui.EditScreen
 import ua.madeisy.iot.ui.EspAddScreen
+import ua.madeisy.iot.ui.FlashScreen
 import ua.madeisy.iot.ui.EspConfigScreen
 import ua.madeisy.iot.ui.EspDeviceScreen
 import ua.madeisy.iot.ui.HelpScreen
@@ -124,6 +125,7 @@ private fun AppRoot(openDevice: String?, consumed: () -> Unit) {
                 else EditScreen(screen.key, nav)
             Screen.AddEsp -> EspAddScreen(nav)
             Screen.Thermostats -> ThermostatsScreen(nav)
+            Screen.Flash -> FlashScreen(nav)
             Screen.Settings -> SettingsScreen(nav)
             Screen.Help -> HelpScreen(nav)
         }

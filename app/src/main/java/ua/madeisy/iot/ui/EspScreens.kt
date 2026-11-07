@@ -243,7 +243,7 @@ private fun EspCompCard(c: EspComp, s: EspState, send: (JSONObject) -> Unit) {
                 }
             }
         }
-        EspType.DHT, EspType.AHT, EspType.DS18B20 -> SectionCard {
+        EspType.DHT, EspType.AHT, EspType.DS18B20, EspType.BME -> SectionCard {
             Text(c.name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(c.temp?.let { String.format(Locale.US, "%.1f °C", it) } ?: "—", style = MaterialTheme.typography.displaySmall)
@@ -252,12 +252,18 @@ private fun EspCompCard(c: EspComp, s: EspState, send: (JSONObject) -> Unit) {
                     Text("${it.toInt()} %", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+            c.pres?.let {
+                Text(
+                    String.format(Locale.US, "Тиск %.1f гПа · %.0f мм рт. ст.", it, it * 0.750062) + (c.model?.let { m -> " · $m" } ?: ""),
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             if (c.temp == null) Text("Датчик не відповідає — перевір підключення і пін", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
         EspType.ANALOG -> SectionCard {
             Text(c.name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("${c.pct ?: 0} %", style = MaterialTheme.typography.displaySmall)
-            Text("Сире значення: ${c.raw ?: 0} з 4095", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Сире значення: ${c.raw ?: 0}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         EspType.THERMO -> SectionCard {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -344,7 +350,7 @@ fun EspAddScreen(nav: Nav) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Плата ESP32-C3") },
+                title = { Text("Плата ESP") },
                 navigationIcon = { IconButton(onClick = { nav.pop() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") } },
             )
         },
@@ -356,14 +362,16 @@ fun EspAddScreen(nav: Nav) {
         ) {
             SectionCard("1. Прошивка") {
                 Text(
-                    "Завантаж esp32c3-full.bin з релізу і проший плату з комп'ютера через браузер Chrome (esptool-js): адреса 0x0. Один раз — далі оновлення йдуть по Wi-Fi.",
+                    "Найпростіше — прошити прямо з телефона: підключи плату через OTG-кабель. Підходять ESP8266 (D1 mini, NodeMCU, ESP-01), ESP32, S2, S3, C3. Після прошивки додаток сам передасть плату Wi-Fi і додасть її. Далі оновлення йдуть по Wi-Fi.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { open(FIRMWARE_URL) }, modifier = Modifier.weight(1f)) { Text("Прошивка") }
-                    OutlinedButton(onClick = { open(FLASHER_URL) }, modifier = Modifier.weight(1f)) { Text("Прошивальник") }
+                    OutlinedButton(onClick = { open(FIRMWARE_URL) }, modifier = Modifier.weight(1f)) { Text("Файли") }
+                    OutlinedButton(onClick = { open(FLASHER_URL) }, modifier = Modifier.weight(1f)) { Text("З комп'ютера") }
                 }
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = { nav.push(Screen.Flash) }, modifier = Modifier.fillMaxWidth()) { Text("Прошити з телефона через USB") }
             }
             SectionCard("2. Wi-Fi") {
                 Text(
@@ -459,8 +467,10 @@ fun EspConfigScreen(key: String, nav: Nav) {
     var confirmDelete by remember { mutableStateOf(false) }
     var showKey by remember { mutableStateOf(false) }
     val client = remember(original) { EspClient(original.ip, original.apiKey) }
+    var board by remember { mutableStateOf("esp32c3") }
 
     LaunchedEffect(key) {
+        runCatching { client.info().board.takeIf { it.isNotBlank() && it != "unknown" }?.let { board = it } }
         try {
             val j = client.getConfig()
             comps.clear(); comps.addAll(EspCompConfig.listFromJson(j))
@@ -520,14 +530,23 @@ fun EspConfigScreen(key: String, nav: Nav) {
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (comps.isEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AssistChip(onClick = { comps.add(EspCompConfig(EspType.RELAY, "Реле", pin = 5)) }, label = { Text("Реле") })
+                    // типові піни під кожну плату
+                    val relayPin = if (board == "esp01") 0 else 5
+                    val buttonPin = when (board) { "esp8266" -> 12; "esp01" -> 2; else -> 4 }
+                    val dhtPin = when (board) { "esp8266" -> 14; "esp01" -> 2; "esp32c3" -> 3; else -> 4 }
+                    val stripPin = when (board) { "esp8266" -> 13; "esp01" -> 2; "esp32" -> 18; else -> 7 }
+                    AssistChip(onClick = { comps.add(EspCompConfig(EspType.RELAY, "Реле", pin = relayPin, inv = board == "esp01")) }, label = { Text("Реле") })
                     AssistChip(onClick = {
-                        comps.add(EspCompConfig(EspType.RELAY, "Реле", pin = 5))
-                        comps.add(EspCompConfig(EspType.BUTTON, "Кнопка", pin = 4, target = 0))
+                        comps.add(EspCompConfig(EspType.RELAY, "Реле", pin = relayPin, inv = board == "esp01"))
+                        comps.add(EspCompConfig(EspType.BUTTON, "Кнопка", pin = buttonPin, target = comps.lastIndex))
                     }, label = { Text("Реле + кнопка") })
-                    AssistChip(onClick = { comps.add(EspCompConfig(EspType.DHT, "Температура", pin = 3)) }, label = { Text("DHT22") })
-                    AssistChip(onClick = { comps.add(EspCompConfig(EspType.WS2812, "Стрічка", pin = 7, count = 30)) }, label = { Text("Стрічка WS2812") })
-                    AssistChip(onClick = { comps.add(EspCompConfig(EspType.PWM, "LED на платі", pin = 8, inv = true)) }, label = { Text("LED на платі") })
+                    AssistChip(onClick = { comps.add(EspCompConfig(EspType.DHT, "Температура", pin = dhtPin)) }, label = { Text("DHT22") })
+                    AssistChip(onClick = { comps.add(EspCompConfig(EspType.WS2812, "Стрічка", pin = stripPin, count = 30)) }, label = { Text("Стрічка WS2812") })
+                    AssistChip(onClick = { comps.add(EspCompConfig(EspType.PWM, "LED на платі", pin = if (board == "esp32c3") 8 else 2, inv = board == "esp32c3" || board.startsWith("esp8266"))) }, label = { Text("LED на платі") })
+                    AssistChip(onClick = { comps.add(EspCompConfig(EspType.BME, "Клімат", sda = if (board.startsWith("esp8266")) 4 else 6, scl = if (board.startsWith("esp8266")) 5 else 7)) }, label = { Text("BME280") })
+                    if (board == "esp01") AssistChip(onClick = {
+                        comps.add(EspCompConfig(EspType.RELAY, "Реле", pin = 0, inv = true))
+                    }, label = { Text("ESP-01S реле") })
                 }
                 comps.forEachIndexed { i, c ->
                     val conflict = c.pins.any { (usedPins[it] ?: 0) > 1 }
@@ -536,9 +555,9 @@ fun EspConfigScreen(key: String, nav: Nav) {
                         supportingContent = {
                             Text(
                                 c.type.label + " · " + when (c.type) {
-                                    EspType.AHT -> "SDA ${c.sda}, SCL ${c.scl}"
+                                    EspType.AHT, EspType.BME -> "SDA ${c.sda}, SCL ${c.scl}"
                                     EspType.THERMO -> "датчик №${c.sensor} → реле №${c.target}"
-                                    else -> "GPIO ${c.pin}"
+                                    else -> EspCompConfig.pinLabel(c.pin, board)
                                 } +
                                     (if (c.type == EspType.BUTTON) " → №${c.target}" else "") +
                                     (if (conflict) " · ⚠ пін зайнятий" else ""),
@@ -567,13 +586,13 @@ fun EspConfigScreen(key: String, nav: Nav) {
                                 text = { Column { Text(t.label); Text(t.hint, style = MaterialTheme.typography.bodySmall) } },
                                 onClick = {
                                     addMenu = false
-                                    val free = EspCompConfig.PINS.firstOrNull { it !in usedPins && it != 9 } ?: 0
+                                    val free = EspCompConfig.pinsFor(board).firstOrNull { it !in usedPins && EspCompConfig.pinHint(it, board)?.contains("strap") != true } ?: 0
                                     comps.add(
                                         if (t == EspType.THERMO) EspCompConfig(
                                             t,
                                             sensor = comps.indexOfFirst { it.type in EspType.tempSensors },
                                             target = comps.indexOfFirst { it.type == EspType.RELAY },
-                                        ) else EspCompConfig(t, pin = free)
+                                        ) else EspCompConfig(t, pin = free, max = EspCompConfig.adcMax(board))
                                     )
                                     editIndex = comps.lastIndex
                                 },
@@ -582,7 +601,13 @@ fun EspConfigScreen(key: String, nav: Nav) {
                     }
                 }
                 Text(
-                    "Піни ESP32-C3: 0–10, 20, 21. Аналогові — лише 0–4. 9 — кнопка BOOT, 8 — світлодіод на більшості плат, 2/8/9 впливають на завантаження: не тягни їх до землі при старті.",
+                    when (board) {
+                        "esp8266" -> "Wemos D1 mini: найбезпечніші D1, D2, D5, D6, D7. D3/D4/D8 впливають на завантаження, D4 — світлодіод. A0 — аналог до 1 В (на D1 mini — до 3.3 В через дільник). I2C: D2 = SDA, D1 = SCL."
+                        "esp01" -> "ESP-01: доступні GPIO0, GPIO2 і (якщо не потрібен UART) RX=3, TX=1. GPIO0 і GPIO2 мають бути HIGH при старті. На ESP-01S Relay реле на GPIO0, вмикається низьким рівнем (якщо навпаки — зніми «Інвертувати»)."
+                        "esp32" -> "ESP32: 34–39 лише входи. 0, 2, 12, 15 впливають на завантаження. Аналогові — 32–39."
+                        "esp32s2", "esp32s3" -> "ESP32-S2/S3: аналогові 1–10. 0 — BOOT, 19/20 зайняті USB."
+                        else -> "ESP32-C3: піни 0–10, 20, 21. Аналогові — лише 0–4. 9 — кнопка BOOT, 8 — світлодіод на більшості плат, 2/8/9 впливають на завантаження."
+                    },
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -613,7 +638,7 @@ fun EspConfigScreen(key: String, nav: Nav) {
     editIndex?.let { i ->
         if (i in comps.indices) {
             EspCompDialog(
-                initial = comps[i], index = i, all = comps.toList(),
+                initial = comps[i], index = i, all = comps.toList(), board = board,
                 onDismiss = { editIndex = null },
                 onSave = { comps[i] = it; editIndex = null },
             )
@@ -638,7 +663,7 @@ fun EspConfigScreen(key: String, nav: Nav) {
 }
 
 @Composable
-private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompConfig>, onDismiss: () -> Unit, onSave: (EspCompConfig) -> Unit) {
+private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompConfig>, board: String, onDismiss: () -> Unit, onSave: (EspCompConfig) -> Unit) {
     var c by remember { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -646,11 +671,12 @@ private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompC
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(c.name, { c = c.copy(name = it) }, label = { Text("Назва") }, singleLine = true)
-                if (c.type == EspType.AHT) {
-                    PinPicker("SDA", c.sda) { c = c.copy(sda = it) }
-                    PinPicker("SCL", c.scl) { c = c.copy(scl = it) }
+                if (c.type == EspType.AHT || c.type == EspType.BME) {
+                    PinPicker("SDA", c.sda, board) { c = c.copy(sda = it) }
+                    PinPicker("SCL", c.scl, board) { c = c.copy(scl = it) }
+                    Text("Усі I2C-датчики на платі ділять одну шину — вкажи однакові SDA/SCL.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else if (c.type != EspType.THERMO) {
-                    PinPicker("Пін (GPIO)", c.pin, analogOnly = c.type == EspType.ANALOG) { c = c.copy(pin = it) }
+                    PinPicker("Пін", c.pin, board, analogOnly = c.type == EspType.ANALOG) { c = c.copy(pin = it) }
                 }
                 when (c.type) {
                     EspType.RELAY -> {
@@ -689,7 +715,7 @@ private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompC
                     }
                     EspType.ANALOG -> {
                         NumField("0 % при значенні", c.min) { c = c.copy(min = it) }
-                        NumField("100 % при значенні", c.max) { c = c.copy(max = it) }
+                        NumField("100 % при значенні (макс. ${EspCompConfig.adcMax(board)})", c.max) { c = c.copy(max = it) }
                         CheckRow("Інвертувати (напр. ґрунт: сухо = високе значення)", c.inv) { c = c.copy(inv = it) }
                     }
                     EspType.INPUT -> {
@@ -743,17 +769,17 @@ private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompC
 }
 
 @Composable
-private fun PinPicker(label: String, value: Int, analogOnly: Boolean = false, onPick: (Int) -> Unit) {
+private fun PinPicker(label: String, value: Int, board: String, analogOnly: Boolean = false, onPick: (Int) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Box {
         OutlinedButton(onClick = { open = true }, modifier = Modifier.fillMaxWidth()) {
-            Text("$label: GPIO $value" + (EspCompConfig.pinHint(value)?.let { " ($it)" } ?: ""), modifier = Modifier.weight(1f))
+            Text("$label: ${EspCompConfig.pinLabel(value, board)}" + (EspCompConfig.pinHint(value, board)?.let { " ($it)" } ?: ""), modifier = Modifier.weight(1f))
             Icon(Icons.Filled.ArrowDropDown, null)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            EspCompConfig.PINS.filter { !analogOnly || it <= 4 }.forEach { p ->
+            (if (analogOnly) EspCompConfig.analogPins(board) else EspCompConfig.pinsFor(board)).forEach { p ->
                 DropdownMenuItem(
-                    text = { Text("GPIO $p" + (EspCompConfig.pinHint(p)?.let { " · $it" } ?: "")) },
+                    text = { Text(EspCompConfig.pinLabel(p, board) + (EspCompConfig.pinHint(p, board)?.let { " · $it" } ?: "")) },
                     onClick = { onPick(p); open = false },
                 )
             }
@@ -813,6 +839,7 @@ private fun FirmwareSection(cfg: DeviceConfig) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var current by remember { mutableStateOf<String?>(null) }
+    var board by remember { mutableStateOf("") }
     var latest by remember { mutableStateOf<String?>(null) }
     var stage by remember { mutableStateOf<String?>(null) }
     var progress by remember { mutableFloatStateOf(0f) }
@@ -821,7 +848,7 @@ private fun FirmwareSection(cfg: DeviceConfig) {
     val updater = ua.madeisy.iot.esp.EspUpdater
 
     LaunchedEffect(cfg.key) {
-        runCatching { current = EspClient(cfg.ip, cfg.apiKey).info().fw }
+        runCatching { EspClient(cfg.ip, cfg.apiKey).info().let { current = it.fw; board = it.board } }
         runCatching { latest = updater.latestVersion(force = true) }.onFailure { error = it.message }
     }
 
@@ -830,7 +857,7 @@ private fun FirmwareSection(cfg: DeviceConfig) {
         scope.launch {
             try {
                 stage = "Завантаження"; progress = 0f
-                val file = updater.download(ctx) { progress = it }
+                val file = updater.download(ctx, updater.otaAsset(board)) { progress = it }
                 stage = "Запис на плату"; progress = 0f
                 updater.upload(cfg.ip, cfg.apiKey, file) { progress = it }
                 stage = "Перезавантаження"; progress = 0f

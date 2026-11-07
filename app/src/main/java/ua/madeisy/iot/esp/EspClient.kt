@@ -166,10 +166,13 @@ object EspUpdater {
         return false
     }
 
-    /** Завантажує esp32c3-ota.bin у кеш додатку. */
-    suspend fun download(ctx: Context, onProgress: (Float) -> Unit): java.io.File = withContext(Dispatchers.IO) {
-        val out = java.io.File(ctx.cacheDir, "esp32c3-ota.bin")
-        val conn = URL("$BASE/esp32c3-ota.bin").openConnection() as HttpURLConnection
+    /** Файл прошивки для OTA за типом плати з /api/info (старі прошивки 1.0.5 не повідомляли board — це C3). */
+    fun otaAsset(board: String): String = if (board.isBlank() || board == "unknown") "esp32c3-ota.bin" else "iot-$board-ota.bin"
+
+    /** Завантажує файл з останнього релізу в кеш додатку. */
+    suspend fun download(ctx: Context, asset: String, onProgress: (Float) -> Unit): java.io.File = withContext(Dispatchers.IO) {
+        val out = java.io.File(ctx.cacheDir, asset)
+        val conn = URL("$BASE/$asset").openConnection() as HttpURLConnection
         try {
             conn.connectTimeout = 10000; conn.readTimeout = 20000
             conn.instanceFollowRedirects = true
