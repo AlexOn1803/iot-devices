@@ -32,6 +32,29 @@ class Storage(context: Context) {
     private val _settings = MutableStateFlow(loadSettings())
     val settings: StateFlow<AppSettings> = _settings
 
+    private val _thermostats = MutableStateFlow(loadThermostats())
+    val thermostats: StateFlow<List<Thermostat>> = _thermostats
+
+    private fun loadThermostats(): List<Thermostat> = try {
+        val arr = JSONArray(prefs.getString("thermostats", "[]"))
+        (0 until arr.length()).map { Thermostat.fromJson(arr.getJSONObject(it)) }
+    } catch (e: Exception) { emptyList() }
+
+    @Synchronized
+    fun saveThermostats(list: List<Thermostat>) {
+        prefs.edit().putString("thermostats", JSONArray().apply { list.forEach { put(it.toJson()) } }.toString()).apply()
+        _thermostats.value = list
+    }
+
+    fun upsertThermostat(t: Thermostat) {
+        val list = _thermostats.value.toMutableList()
+        val i = list.indexOfFirst { it.id == t.id }
+        if (i >= 0) list[i] = t else list += t
+        saveThermostats(list)
+    }
+
+    fun removeThermostat(id: String) = saveThermostats(_thermostats.value.filterNot { it.id == id })
+
     private val _schedules = MutableStateFlow(loadSchedules())
     val schedules: StateFlow<List<Schedule>> = _schedules
 
@@ -65,6 +88,7 @@ class Storage(context: Context) {
     fun removeDevice(key: String) {
         saveDevices(_devices.value.filterNot { it.key == key })
         saveSchedules(_schedules.value.filterNot { it.deviceKey == key })
+        saveThermostats(_thermostats.value.filterNot { it.sensorKey == key || it.targetKey == key })
     }
 
     private fun loadCloud() = CloudSettings(

@@ -39,8 +39,21 @@ object Notifications {
                 .apply { setShowBadge(false) }
         )
         nm.createNotificationChannel(
-            NotificationChannel(CH_ALERTS, "Сповіщення розклад", NotificationManager.IMPORTANCE_DEFAULT)
+            NotificationChannel(CH_ALERTS, "Сповіщення", NotificationManager.IMPORTANCE_DEFAULT)
         )
+    }
+
+    fun alert(ctx: Context, title: String, text: String) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
+        val n = NotificationCompat.Builder(ctx, CH_ALERTS)
+            .setSmallIcon(R.drawable.ic_plug)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setAutoCancel(true)
+            .build()
+        NotificationManagerCompat.from(ctx).notify((System.currentTimeMillis() % 100000).toInt() + 10, n)
     }
 
     fun scheduleFailed(ctx: Context, name: String, on: Boolean) {

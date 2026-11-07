@@ -132,3 +132,100 @@ object EspDiscovery {
             if (Build.VERSION.SDK_INT >= 34) nsd.resolveService(s, executor, l) else nsd.resolveService(s, l)
         }
 }
+
+/** Оновлення прошивки плат по Wi-Fi з останнього релізу на GitHub. */
+object EspUpdater {
+    private const val BASE = "https://github.com/AlexOn1803/iot-devices/releases/download/latest"
+
+    @Volatile
+    private var cachedLatest: Pair<String, Long>? = null
+
+    /** Версія прошивки в останньому релізі (напр. "1.0.12"); кеш на 10 хв. */
+    suspend fun latestVersion(force: Boolean = false): String = withContext(Dispatchers.IO) {
+        cachedLatest?.let { (v, at) -> if (!force && System.currentTimeMillis() - at < 600_000) return@withContext v }
+        val conn = URL("$BASE/version.json").openConnection() as HttpURLConnection
+        try {
+            conn.connectTimeout = 8000; conn.readTimeout = 8000
+            conn.instanceFollowRedirects = true
+            if (conn.responseCode !in 200..299) throw IOException("Не вдалося перевірити оновлення (HTTP ${conn.responseCode})")
+            val v = JSONObject(conn.inputStream.bufferedReader().use { it.readText() }).getString("fw")
+            cachedLatest = v to System.currentTimeMillis()
+            v
+        } finally { conn.disconnect() }
+    }
+
+    /** true, якщо [latest] новіша за [current]. Збірки "dev" вважаються старими. */
+    fun isNewer(latest: String, current: String): Boolean {
+        fun parts(v: String) = v.split('.').map { it.toIntOrNull() ?: -1 }
+        if (current.isBlank() || current == "dev") return true
+        val a = parts(latest); val b = parts(current)
+        for (i in 0 until maxOf(a.size, b.size)) {
+            val x = a.getOrElse(i) { 0 }; val y = b.getOrElse(i) { 0 }
+            if (x != y) return x > y
+        }
+        return false
+    }
+
+    /** Завантажує esp32c3-ota.bin у кеш додатку. */
+    suspend fun download(ctx: Context, onProgress: (Float) -> Unit): java.io.File = withContext(Dispatchers.IO) {
+        val out = java.io.File(ctx.cacheDir, "esp32c3-ota.bin")
+        val conn = URL("$BASE/esp32c3-ota.bin").openConnection() as HttpURLConnection
+        try {
+            conn.connectTimeout = 10000; conn.readTimeout = 20000
+            conn.instanceFollowRedirects = true
+            if (conn.responseCode !in 200..299) throw IOException("Не вдалося завантажити прошивку (HTTP ${conn.responseCode})")
+            val total = conn.contentLengthLong.takeIf { it > 0 } ?: -1
+            conn.inputStream.use { inp ->
+                out.outputStream().use { o ->
+                    val buf = ByteArray(16 * 1024)
+                    var done = 0L
+                    while (true) {
+                        val n = inp.read(buf); if (n < 0) break
+                        o.write(buf, 0, n); done += n
+                        if (total > 0) onProgress(done.toFloat() / total)
+                    }
+                }
+            }
+            // образ ESP завжди починається з магічного байта 0xE9
+            if (out.length() < 100_000 || out.inputStream().use { it.read() } != 0xE9) throw IOException("Завантажений файл не схожий на прошивку")
+            out
+        } finally { conn.disconnect() }
+    }
+
+    /** Надсилає прошивку на плату (multipart POST /update). Після успіху плата перезавантажується. */
+    suspend fun upload(host: String, key: String, file: java.io.File, onProgress: (Float) -> Unit) = withContext(Dispatchers.IO) {
+        val boundary = "----iot" + System.currentTimeMillis()
+        val head = ("--$boundary\r\nContent-Disposition: form-data; name=\"firmware\"; filename=\"firmware.bin\"\r\n" +
+            "Content-Type: application/octet-stream\r\n\r\n").toByteArray()
+        val tail = "\r\n--$boundary--\r\n".toByteArray()
+        val total = head.size + file.length() + tail.size
+        val conn = URL("http://$host/update").openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "POST"
+            conn.doOutput = true
+            conn.connectTimeout = 5000
+            conn.readTimeout = 60000
+            conn.setFixedLengthStreamingMode(total)
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            if (key.isNotEmpty()) conn.setRequestProperty("X-Key", key)
+            conn.outputStream.use { o ->
+                o.write(head)
+                file.inputStream().use { inp ->
+                    val buf = ByteArray(4096)
+                    var done = 0L
+                    while (true) {
+                        val n = inp.read(buf); if (n < 0) break
+                        o.write(buf, 0, n); done += n
+                        onProgress(done.toFloat() / file.length())
+                    }
+                }
+                o.write(tail)
+            }
+            when (val code = conn.responseCode) {
+                in 200..299 -> Unit
+                401 -> throw EspHttpException(code, "Невірний ключ доступу до плати")
+                else -> throw EspHttpException(code, "Плата не прийняла прошивку (помилка $code)")
+            }
+        } finally { conn.disconnect() }
+    }
+}

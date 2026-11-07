@@ -22,6 +22,8 @@ import androidx.compose.runtime.setValue
 import ua.madeisy.iot.data.HistoryDb
 import ua.madeisy.iot.data.PlugController
 import ua.madeisy.iot.data.Storage
+import ua.madeisy.iot.data.ThermostatEngine
+import ua.madeisy.iot.ui.ThermostatsScreen
 import ua.madeisy.iot.service.MonitorService
 import ua.madeisy.iot.service.Notifications
 import ua.madeisy.iot.service.ScheduleManager
@@ -41,6 +43,7 @@ class IotApp : Application() {
     lateinit var storage: Storage
     lateinit var history: HistoryDb
     lateinit var controller: PlugController
+    lateinit var thermostats: ThermostatEngine
 
     override fun onCreate() {
         super.onCreate()
@@ -48,6 +51,7 @@ class IotApp : Application() {
         storage = Storage(this)
         history = HistoryDb(this)
         controller = PlugController(this, storage, history)
+        thermostats = ThermostatEngine(this, storage, controller).also { it.start() }
         Notifications.createChannels(this)
         ScheduleManager.rescheduleAll(this)
     }
@@ -119,6 +123,7 @@ private fun AppRoot(openDevice: String?, consumed: () -> Unit) {
                 if (screen.key != null && IotApp.instance.storage.device(screen.key)?.isEsp == true) EspConfigScreen(screen.key, nav)
                 else EditScreen(screen.key, nav)
             Screen.AddEsp -> EspAddScreen(nav)
+            Screen.Thermostats -> ThermostatsScreen(nav)
             Screen.Settings -> SettingsScreen(nav)
             Screen.Help -> HelpScreen(nav)
         }

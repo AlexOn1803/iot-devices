@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Thermostat
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ListItem
@@ -71,6 +72,7 @@ fun HomeScreen(nav: Nav) {
             TopAppBar(
                 title = { Text("Мої пристрої") },
                 actions = {
+                    IconButton(onClick = { nav.push(Screen.Thermostats) }) { Icon(Icons.Filled.Thermostat, "Термостати") }
                     IconButton(onClick = { nav.push(Screen.Settings) }) { Icon(Icons.Filled.Settings, "Налаштування") }
                 }
             )

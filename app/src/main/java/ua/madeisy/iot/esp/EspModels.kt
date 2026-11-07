@@ -14,11 +14,13 @@ enum class EspType(val code: String, val label: String, val hint: String) {
     AHT("aht", "AHT10/AHT20", "Температура й вологість (I2C)"),
     ANALOG("analog", "Аналоговий вхід", "Напр. датчик вологості ґрунту (GPIO0–4)"),
     INPUT("input", "Цифровий вхід", "Датчик руху, геркон дверей"),
+    THERMO("thermo", "Термостат", "Датчик цієї плати керує її реле — працює без телефона"),
     UNKNOWN("?", "Невідомо", "");
 
     companion object {
         fun parse(s: String?) = entries.firstOrNull { it.code == s } ?: UNKNOWN
-        val addable = listOf(RELAY, BUTTON, PWM, WS2812, DHT, DS18B20, AHT, ANALOG, INPUT)
+        val addable = listOf(RELAY, BUTTON, PWM, WS2812, DHT, DS18B20, AHT, ANALOG, INPUT, THERMO)
+        val tempSensors = setOf(DHT, DS18B20, AHT)
     }
 }
 
@@ -39,6 +41,12 @@ data class EspCompConfig(
     val scl: Int = 7,
     val min: Int = 0,
     val max: Int = 4095,
+    /** Термостат: індекс датчика; реле — у [target]. */
+    val sensor: Int = -1,
+    val heat: Boolean = true,
+    val onAt: Double = 18.0,
+    val offAt: Double = 19.0,
+    val enabled: Boolean = true,
 ) {
     fun toJson(): JSONObject {
         val o = JSONObject().put("t", type.code).put("name", name)
@@ -52,13 +60,21 @@ data class EspCompConfig(
             EspType.AHT -> o.put("sda", sda).put("scl", scl)
             EspType.ANALOG -> o.put("pin", pin).put("inv", inv).put("min", min).put("max", max)
             EspType.INPUT -> o.put("pin", pin).put("inv", inv).put("pull", pull)
+            EspType.THERMO -> o.put("sensor", sensor).put("target", target).put("mode", if (heat) "heat" else "cool")
+                .put("onAt", onAt).put("offAt", offAt).put("enabled", enabled)
             EspType.UNKNOWN -> {}
         }
         return o
     }
 
     /** Піни, які займає компонент. */
-    val pins: List<Int> get() = if (type == EspType.AHT) listOf(sda, scl) else listOf(pin)
+    val pins: List<Int> get() = when (type) {
+        EspType.AHT -> listOf(sda, scl)
+        EspType.THERMO -> emptyList()
+        else -> listOf(pin)
+    }
+
+    val thermoValid: Boolean get() = sensor >= 0 && target >= 0 && (if (heat) offAt > onAt else offAt < onAt)
 
     companion object {
         fun fromJson(o: JSONObject): EspCompConfig {
@@ -70,6 +86,8 @@ data class EspCompConfig(
                 count = o.optInt("count", 30), model = o.optInt("model", 22),
                 sda = o.optInt("sda", 6), scl = o.optInt("scl", 7),
                 min = o.optInt("min", 0), max = o.optInt("max", 4095),
+                sensor = o.optInt("sensor", -1), heat = o.optString("mode", "heat") != "cool",
+                onAt = o.optDouble("onAt", 18.0), offAt = o.optDouble("offAt", 19.0), enabled = o.optBoolean("enabled", true),
             )
         }
 
@@ -111,6 +129,13 @@ data class EspComp(
     val raw: Int? = null,
     val pct: Int? = null,
     val active: Boolean? = null,
+    val enabled: Boolean? = null,
+    val heat: Boolean = true,
+    val onAt: Double? = null,
+    val offAt: Double? = null,
+    val thermoState: String? = null,
+    val sensor: Int = -1,
+    val target: Int = -1,
 ) {
     val isSwitchable: Boolean get() = type == EspType.RELAY || type == EspType.PWM || type == EspType.WS2812
 
@@ -129,6 +154,10 @@ data class EspComp(
                 rgb = rgb, fx = o.optString("fx").ifEmpty { null },
                 temp = o.optDoubleOrNull("temp"), hum = o.optDoubleOrNull("hum"),
                 raw = o.optIntOrNull("raw"), pct = o.optIntOrNull("pct"), active = o.optBoolOrNull("active"),
+                enabled = o.optBoolOrNull("enabled"), heat = o.optString("mode", "heat") != "cool",
+                onAt = o.optDoubleOrNull("onAt"), offAt = o.optDoubleOrNull("offAt"),
+                thermoState = o.optString("state").ifEmpty { null },
+                sensor = o.optInt("sensor", -1), target = o.optInt("target", -1),
             )
         }
 

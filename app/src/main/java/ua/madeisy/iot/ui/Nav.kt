@@ -7,6 +7,7 @@ sealed interface Screen {
     data object Settings : Screen
     data object Help : Screen
     data object AddEsp : Screen
+    data object Thermostats : Screen
 }
 
 interface Nav {

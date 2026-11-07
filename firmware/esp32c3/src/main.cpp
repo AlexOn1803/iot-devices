@@ -45,7 +45,7 @@ uint32_t restartAt = 0;
 
 // ---------------- компоненти ----------------
 
-enum CompType { C_RELAY, C_BUTTON, C_PWM, C_WS2812, C_DHT, C_DS18B20, C_AHT, C_ANALOG, C_INPUT, C_UNKNOWN };
+enum CompType { C_RELAY, C_BUTTON, C_PWM, C_WS2812, C_DHT, C_DS18B20, C_AHT, C_ANALOG, C_INPUT, C_THERMO, C_UNKNOWN };
 
 struct Comp {
   CompType type = C_UNKNOWN;
@@ -78,6 +78,14 @@ struct Comp {
   bool active = false;
   bool pull = true;
   uint32_t lastRead = 0;
+  // термостат: датчик [sensor] керує реле [target]
+  int sensor = -1;
+  bool heat = true;          // true — обігрів, false — охолодження
+  float onAt = 18, offAt = 19;
+  bool enabled = true;
+  uint32_t lastSwitch = 0;
+  uint32_t sensorBadSince = 0;
+  String thermoState = "idle"; // idle | on | off | nosensor
 };
 
 std::vector<Comp> comps;
@@ -93,6 +101,7 @@ CompType parseType(const String& t) {
   if (t == "aht") return C_AHT;
   if (t == "analog") return C_ANALOG;
   if (t == "input") return C_INPUT;
+  if (t == "thermo") return C_THERMO;
   return C_UNKNOWN;
 }
 
@@ -226,6 +235,14 @@ void buildComps(JsonArrayConst arr) {
         c.pull = o["pull"] | true;
         if (validPin(c.pin)) pinMode(c.pin, c.pull ? INPUT_PULLUP : INPUT);
         break;
+      case C_THERMO:
+        c.sensor = o["sensor"] | -1;
+        c.target = o["target"] | -1;
+        c.heat = String((const char*)(o["mode"] | "heat")) != "cool";
+        c.onAt = o["onAt"] | 18.0f;
+        c.offAt = o["offAt"] | 19.0f;
+        c.enabled = o["enabled"] | true;
+        break;
       default:
         break;
     }
@@ -298,6 +315,52 @@ void setRelay(Comp& c, bool on) {
   if (c.powerOn == "memory") saveRelayStates();
 }
 
+/**
+ * Термостат на самій платі: працює без телефона і без Wi-Fi.
+ * Гістерезис між onAt і offAt, перемикання не частіше ніж раз на 30 с,
+ * при втраті датчика на 60 с обігрів вимикається.
+ */
+void handleThermostats(uint32_t now) {
+  for (auto& t : comps) {
+    if (t.type != C_THERMO) continue;
+    if (t.sensor < 0 || t.sensor >= (int)comps.size() || t.target < 0 || t.target >= (int)comps.size()) continue;
+    Comp& sensor = comps[t.sensor];
+    Comp& relay = comps[t.target];
+    if (relay.type != C_RELAY) continue;
+    t.temp = sensor.temp;
+    if (!t.enabled) { t.thermoState = "idle"; t.sensorBadSince = 0; continue; }
+    if (isnan(sensor.temp)) {
+      if (!t.sensorBadSince) t.sensorBadSince = now ? now : 1;
+      t.thermoState = "nosensor";
+      if (t.heat && relay.on && now - t.sensorBadSince > 60000) setRelay(relay, false);
+      continue;
+    }
+    t.sensorBadSince = 0;
+    int want = -1;
+    if (t.heat) { if (sensor.temp <= t.onAt) want = 1; else if (sensor.temp >= t.offAt) want = 0; }
+    else { if (sensor.temp >= t.onAt) want = 1; else if (sensor.temp <= t.offAt) want = 0; }
+    if (want >= 0 && (bool)want != relay.on && (t.lastSwitch == 0 || now - t.lastSwitch > 30000)) {
+      t.lastSwitch = now;
+      setRelay(relay, want == 1);
+    }
+    t.thermoState = relay.on ? "on" : "off";
+  }
+}
+
+/** Зберігає змінені з додатку параметри термостата у конфіг на флеші. */
+void persistThermo(int i) {
+  JsonDocument doc;
+  if (deserializeJson(doc, configJson)) return;
+  JsonArray arr = doc["comps"];
+  if (i < 0 || i >= (int)arr.size()) return;
+  Comp& c = comps[i];
+  JsonObject o = arr[i];
+  o["enabled"] = c.enabled; o["onAt"] = c.onAt; o["offAt"] = c.offAt; o["mode"] = c.heat ? "heat" : "cool";
+  String s; serializeJson(doc, s);
+  configJson = s;
+  prefs.putString("cfg", s);
+}
+
 void handleButtons(uint32_t now) {
   for (auto& c : comps) {
     if (c.type != C_BUTTON || !validPin(c.pin)) continue;
@@ -367,6 +430,11 @@ String stateJson() {
         break;
       case C_BUTTON:
         o["target"] = c.target;
+        break;
+      case C_THERMO:
+        o["enabled"] = c.enabled; o["mode"] = c.heat ? "heat" : "cool";
+        putNum(o, "onAt", c.onAt); putNum(o, "offAt", c.offAt); putNum(o, "temp", c.temp);
+        o["sensor"] = c.sensor; o["target"] = c.target; o["state"] = c.thermoState;
         break;
       default:
         break;
@@ -461,6 +529,13 @@ void handleSet() {
       }
       if (o["fx"].is<const char*>()) c.fx = (const char*)o["fx"];
       if (c.type == C_PWM) applyPwm(c); else applyStrip(c, now);
+    } else if (c.type == C_THERMO) {
+      if (o["enabled"].is<bool>()) c.enabled = o["enabled"];
+      if (o["onAt"].is<float>()) c.onAt = o["onAt"];
+      if (o["offAt"].is<float>()) c.offAt = o["offAt"];
+      if (o["mode"].is<const char*>()) c.heat = String((const char*)o["mode"]) != "cool";
+      c.lastSwitch = 0;
+      persistThermo(i);
     }
   }
   sendJson(200, stateJson());
@@ -693,6 +768,7 @@ void loop() {
 
   handleButtons(now);
   readSensors(now);
+  handleThermostats(now);
 
   for (auto& c : comps) {
     if (c.type == C_RELAY && c.countdownEnd && (int32_t)(now - c.countdownEnd) >= 0) {

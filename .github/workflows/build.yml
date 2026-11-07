@@ -109,8 +109,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          echo '{"fw":"1.0.${{ github.run_number }}","app":"1.0.${{ github.run_number }}"}' > out/version.json
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest out/iot-devices.apk out/esp32c3-full.bin out/esp32c3-ota.bin \
+          gh release create latest out/iot-devices.apk out/esp32c3-full.bin out/esp32c3-ota.bin out/version.json \
             --title "IoT Devices (збірка ${{ github.run_number }})" \
             --latest \
             --notes "Автоматична збірка з коміту ${{ github.sha }}.

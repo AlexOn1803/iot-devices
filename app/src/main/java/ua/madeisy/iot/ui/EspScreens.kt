@@ -135,6 +135,7 @@ fun EspDeviceScreen(key: String, nav: Nav) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             EspStatusLine(cfg, s)
+            UpdateBanner(cfg, s.online) { nav.push(Screen.Edit(key)) }
             if (s.online && s.comps.isEmpty()) {
                 SectionCard("Плата ще не налаштована") {
                     Text(
@@ -257,6 +258,35 @@ private fun EspCompCard(c: EspComp, s: EspState, send: (JSONObject) -> Unit) {
             Text(c.name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("${c.pct ?: 0} %", style = MaterialTheme.typography.displaySmall)
             Text("Сире значення: ${c.raw ?: 0} з 4095", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        EspType.THERMO -> SectionCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(c.name, style = MaterialTheme.typography.titleMedium)
+                    val relay = s.comps.firstOrNull { it.i == c.target }
+                    Text(
+                        (if (c.heat) "Обігрів" else "Охолодження") + " · " + (relay?.name ?: "реле ?") + ": " + when (c.thermoState) {
+                            "on" -> "працює"; "off" -> "вимкнено"; "nosensor" -> "немає даних з датчика"; else -> "термостат вимкнено"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = when (c.thermoState) { "on" -> OnGreen; "nosensor" -> MaterialTheme.colorScheme.error; else -> MaterialTheme.colorScheme.onSurfaceVariant },
+                    )
+                }
+                Switch(checked = c.enabled == true, onCheckedChange = { send(JSONObject().put("enabled", it)) })
+            }
+            Text(c.temp?.let { String.format(Locale.US, "%.1f °C", it) } ?: "—", style = MaterialTheme.typography.displaySmall)
+            val on = c.onAt ?: 18.0
+            val off = c.offAt ?: 19.0
+            TempStepper(if (c.heat) "Увімкнути, коли ≤" else "Увімкнути, коли ≥", on) { v ->
+                if (if (c.heat) v < off else v > off) send(JSONObject().put("onAt", v))
+            }
+            TempStepper(if (c.heat) "Вимкнути, коли ≥" else "Вимкнути, коли ≤", off) { v ->
+                if (if (c.heat) v > on else v < on) send(JSONObject().put("offAt", v))
+            }
+            Text(
+                "Працює на самій платі — навіть без телефона й Wi-Fi.",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         EspType.INPUT -> SectionCard {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -505,14 +535,26 @@ fun EspConfigScreen(key: String, nav: Nav) {
                         headlineContent = { Text("$i. ${c.name}") },
                         supportingContent = {
                             Text(
-                                c.type.label + " · " + (if (c.type == EspType.AHT) "SDA ${c.sda}, SCL ${c.scl}" else "GPIO ${c.pin}") +
+                                c.type.label + " · " + when (c.type) {
+                                    EspType.AHT -> "SDA ${c.sda}, SCL ${c.scl}"
+                                    EspType.THERMO -> "датчик №${c.sensor} → реле №${c.target}"
+                                    else -> "GPIO ${c.pin}"
+                                } +
                                     (if (c.type == EspType.BUTTON) " → №${c.target}" else "") +
                                     (if (conflict) " · ⚠ пін зайнятий" else ""),
                                 color = if (conflict) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         },
                         trailingContent = {
-                            IconButton(onClick = { comps.removeAt(i) }) { Icon(Icons.Filled.Delete, "Прибрати") }
+                            IconButton(onClick = {
+                                comps.removeAt(i)
+                                // посилання на інші компоненти — за індексом, тож зсуваємо їх
+                                fun fix(x: Int) = when { x == i -> -1; x > i -> x - 1; else -> x }
+                                for (k in comps.indices) {
+                                    val o = comps[k]
+                                    if (o.type == EspType.BUTTON || o.type == EspType.THERMO) comps[k] = o.copy(target = fix(o.target), sensor = fix(o.sensor))
+                                }
+                            }) { Icon(Icons.Filled.Delete, "Прибрати") }
                         },
                         modifier = Modifier.clickable { editIndex = i },
                     )
@@ -526,7 +568,13 @@ fun EspConfigScreen(key: String, nav: Nav) {
                                 onClick = {
                                     addMenu = false
                                     val free = EspCompConfig.PINS.firstOrNull { it !in usedPins && it != 9 } ?: 0
-                                    comps.add(EspCompConfig(t, pin = free))
+                                    comps.add(
+                                        if (t == EspType.THERMO) EspCompConfig(
+                                            t,
+                                            sensor = comps.indexOfFirst { it.type in EspType.tempSensors },
+                                            target = comps.indexOfFirst { it.type == EspType.RELAY },
+                                        ) else EspCompConfig(t, pin = free)
+                                    )
                                     editIndex = comps.lastIndex
                                 },
                             )
@@ -554,6 +602,7 @@ fun EspConfigScreen(key: String, nav: Nav) {
                 "Ключ потрібен для веб-сторінки плати (http://${original.ip}/) і другого телефону. Скинути плату: утримуй BOOT 5 секунд.",
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            FirmwareSection(original)
             OutlinedButton(onClick = {
                 scope.launch { runCatching { client.reboot() }.onFailure { snackbar.showSnackbar(it.message ?: "Помилка") } }
             }) { Text("Перезавантажити плату") }
@@ -600,7 +649,7 @@ private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompC
                 if (c.type == EspType.AHT) {
                     PinPicker("SDA", c.sda) { c = c.copy(sda = it) }
                     PinPicker("SCL", c.scl) { c = c.copy(scl = it) }
-                } else {
+                } else if (c.type != EspType.THERMO) {
                     PinPicker("Пін (GPIO)", c.pin, analogOnly = c.type == EspType.ANALOG) { c = c.copy(pin = it) }
                 }
                 when (c.type) {
@@ -647,11 +696,48 @@ private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompC
                         CheckRow("Підтяжка до 3.3 В", c.pull) { c = c.copy(pull = it) }
                         CheckRow("Інвертувати", c.inv) { c = c.copy(inv = it) }
                     }
+                    EspType.THERMO -> {
+                        Text("Датчик температури", style = MaterialTheme.typography.labelLarge)
+                        val sensors = all.withIndex().filter { it.value.type in EspType.tempSensors }
+                        if (sensors.isEmpty()) Text("Спершу додай датчик DHT, DS18B20 або AHT", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        sensors.forEach { (k, o) ->
+                            Row(Modifier.fillMaxWidth().clickable { c = c.copy(sensor = k) }, verticalAlignment = Alignment.CenterVertically) {
+                                androidx.compose.material3.RadioButton(selected = c.sensor == k, onClick = { c = c.copy(sensor = k) })
+                                Text("$k. ${o.name}")
+                            }
+                        }
+                        Text("Реле", style = MaterialTheme.typography.labelLarge)
+                        val relays = all.withIndex().filter { it.value.type == EspType.RELAY }
+                        if (relays.isEmpty()) Text("Спершу додай реле", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        relays.forEach { (k, o) ->
+                            Row(Modifier.fillMaxWidth().clickable { c = c.copy(target = k) }, verticalAlignment = Alignment.CenterVertically) {
+                                androidx.compose.material3.RadioButton(selected = c.target == k, onClick = { c = c.copy(target = k) })
+                                Text("$k. ${o.name}")
+                            }
+                        }
+                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                            listOf(true to "Обігрів", false to "Охолодження").forEachIndexed { k, (h, l) ->
+                                SegmentedButton(selected = c.heat == h, onClick = {
+                                    c = if (c.heat == h) c else c.copy(heat = h, onAt = c.offAt, offAt = c.onAt)
+                                }, shape = SegmentedButtonDefaults.itemShape(k, 2)) { Text(l) }
+                            }
+                        }
+                        TempStepper(if (c.heat) "Увімкнути, коли ≤" else "Увімкнути, коли ≥", c.onAt) { c = c.copy(onAt = it) }
+                        TempStepper(if (c.heat) "Вимкнути, коли ≥" else "Вимкнути, коли ≤", c.offAt) { c = c.copy(offAt = it) }
+                        if (!c.thermoValid) Text(
+                            "Вибери датчик і реле; поріг вимкнення має бути " + if (c.heat) "вищим за поріг увімкнення" else "нижчим за поріг увімкнення",
+                            color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
+                        )
+                        Text(
+                            "Плата перемикає реле не частіше ніж раз на 30 с. Якщо датчик не відповідає хвилину, обігрів вимикається.",
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     else -> {}
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { onSave(c) }) { Text("Готово") } },
+        confirmButton = { TextButton(enabled = c.type != EspType.THERMO || c.thermoValid, onClick = { onSave(c) }) { Text("Готово") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Скасувати") } },
     )
 }
@@ -691,4 +777,107 @@ private fun NumField(label: String, value: Int, onChange: (Int) -> Unit) {
         label = { Text(label) }, singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
     )
+}
+
+
+// ======================= оновлення прошивки =======================
+
+/** Повідомлення на екрані плати, якщо в релізі є новіша прошивка. */
+@Composable
+private fun UpdateBanner(cfg: DeviceConfig, online: Boolean, onOpen: () -> Unit) {
+    var newer by remember { mutableStateOf<Pair<String, String>?>(null) }
+    LaunchedEffect(cfg.key, online) {
+        if (!online) return@LaunchedEffect
+        runCatching {
+            val cur = EspClient(cfg.ip, cfg.apiKey).info().fw
+            val latest = ua.madeisy.iot.esp.EspUpdater.latestVersion()
+            if (ua.madeisy.iot.esp.EspUpdater.isNewer(latest, cur)) newer = cur to latest
+        }
+    }
+    newer?.let { (cur, latest) ->
+        androidx.compose.material3.Card(
+            onClick = onOpen,
+            colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(16.dp)) {
+                Text("Доступна нова прошивка $latest", style = MaterialTheme.typography.titleSmall)
+                Text("На платі $cur. Натисни, щоб оновити по Wi-Fi.", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun FirmwareSection(cfg: DeviceConfig) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var current by remember { mutableStateOf<String?>(null) }
+    var latest by remember { mutableStateOf<String?>(null) }
+    var stage by remember { mutableStateOf<String?>(null) }
+    var progress by remember { mutableFloatStateOf(0f) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var confirm by remember { mutableStateOf(false) }
+    val updater = ua.madeisy.iot.esp.EspUpdater
+
+    LaunchedEffect(cfg.key) {
+        runCatching { current = EspClient(cfg.ip, cfg.apiKey).info().fw }
+        runCatching { latest = updater.latestVersion(force = true) }.onFailure { error = it.message }
+    }
+
+    fun run() {
+        error = null
+        scope.launch {
+            try {
+                stage = "Завантаження"; progress = 0f
+                val file = updater.download(ctx) { progress = it }
+                stage = "Запис на плату"; progress = 0f
+                updater.upload(cfg.ip, cfg.apiKey, file) { progress = it }
+                stage = "Перезавантаження"; progress = 0f
+                // чекаємо, поки плата повернеться з новою версією
+                val client = EspClient(cfg.ip, cfg.apiKey)
+                var ok = false
+                repeat(30) {
+                    if (ok) return@repeat
+                    delay(2000)
+                    runCatching { client.info() }.getOrNull()?.let { info ->
+                        current = info.fw
+                        if (latest == null || !updater.isNewer(latest!!, info.fw)) ok = true
+                    }
+                }
+                stage = null
+                if (!ok) error = "Плата не повернулась з новою версією — перевір її живлення і Wi-Fi"
+                IotApp.instance.controller.restart(cfg.key)
+            } catch (e: Exception) {
+                stage = null
+                error = e.message ?: "Помилка оновлення"
+            }
+        }
+    }
+
+    Text("Прошивка", style = MaterialTheme.typography.titleMedium)
+    Text(
+        "На платі: ${current ?: "…"} · Остання: ${latest ?: "…"}",
+        style = MaterialTheme.typography.bodySmall,
+    )
+    stage?.let {
+        Text("$it… ${(progress * 100).toInt()} %", style = MaterialTheme.typography.bodySmall)
+        androidx.compose.material3.LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+    }
+    error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+    val canUpdate = latest != null && current != null && updater.isNewer(latest!!, current!!)
+    Button(
+        enabled = stage == null && latest != null && current != null,
+        onClick = { confirm = true },
+    ) { Text(if (canUpdate) "Оновити до $latest" else "Перепрошити ще раз") }
+
+    if (confirm) {
+        AlertDialog(
+            onDismissRequest = { confirm = false },
+            title = { Text("Оновити прошивку?") },
+            text = { Text("Займе близько хвилини. Не вимикай плату під час запису. Налаштування й ключ збережуться.") },
+            confirmButton = { TextButton(onClick = { confirm = false; run() }) { Text("Оновити") } },
+            dismissButton = { TextButton(onClick = { confirm = false }) { Text("Скасувати") } },
+        )
+    }
 }
