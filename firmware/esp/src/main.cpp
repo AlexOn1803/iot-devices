@@ -40,6 +40,8 @@ uint32_t staStartedAt = 0;
 uint32_t lastStaOk = 0;
 bool restartPending = false;
 uint32_t restartAt = 0;
+String mqttStatus = "off";
+String mqttHost;
 
 // ---------------- компоненти ----------------
 
@@ -407,7 +409,7 @@ void putNum(JsonObject o, const char* k, float v, int digits = 1) {
   else { float m = powf(10, digits); o[k] = roundf(v * m) / m; }
 }
 
-String stateJson() {
+String stateJson(bool diag = true) {
   JsonDocument doc;
   JsonArray arr = doc["comps"].to<JsonArray>();
   uint32_t now = millis();
@@ -466,8 +468,10 @@ String stateJson() {
         break;
     }
   }
-  doc["uptime"] = now / 1000;
-  doc["rssi"] = WiFi.RSSI();
+  if (diag) {
+    doc["uptime"] = now / 1000;
+    doc["rssi"] = WiFi.RSSI();
+  }
   String s;
   serializeJson(doc, s);
   return s;
@@ -486,6 +490,8 @@ String infoJson() {
   doc["ap"] = apMode;
   doc["chip"] = CHIP_NAME;
   doc["board"] = FW_BOARD;
+  doc["mqtt"] = mqttStatus;
+  doc["mqttHost"] = mqttHost;
   String s;
   serializeJson(doc, s);
   return s;
@@ -522,11 +528,8 @@ bool parseBody(JsonDocument& doc) {
 
 void scheduleRestart(uint32_t ms = 500) { restartPending = true; restartAt = millis() + ms; }
 
-void handleSet() {
-  if (!requireAuth()) return;
-  JsonDocument doc;
-  if (!parseBody(doc)) return;
-  // можна надіслати один об'єкт або масив
+/** Виконує команди компонентам (з HTTP або MQTT): один об'єкт або масив. */
+void applyCommands(JsonVariant doc) {
   JsonArray list;
   JsonDocument wrap;
   if (doc.is<JsonArray>()) list = doc.as<JsonArray>();
@@ -565,6 +568,13 @@ void handleSet() {
       persistThermo(i);
     }
   }
+}
+
+void handleSet() {
+  if (!requireAuth()) return;
+  JsonDocument doc;
+  if (!parseBody(doc)) return;
+  applyCommands(doc.as<JsonVariant>());
   sendJson(200, stateJson());
 }
 
@@ -635,6 +645,118 @@ void handleScan() {
   sendJson(200, out);
 }
 
+// ---------------- MQTT (доступ через інтернет) ----------------
+// Топіки: iotdev/<id>/state (retained стан), /status (online/offline, LWT), /info, /set (команди)
+
+#include <PubSubClient.h>
+#include <time.h>
+#include "certs.h"
+#if defined(ESP8266)
+  #include <WiFiClientSecureBearSSL.h>
+  BearSSL::WiFiClientSecure mqttTlsClient;
+  BearSSL::X509List* mqttCa = nullptr;
+#else
+  #include <WiFiClientSecure.h>
+  WiFiClientSecure mqttTlsClient;
+#endif
+WiFiClient mqttPlainClient;
+PubSubClient mqtt;
+String mqttUser, mqttPass;
+int mqttPort = 8883;
+bool mqttEnabled = false;
+uint32_t mqttLastTry = 0, mqttRetryMs = 5000, mqttLastCheck = 0, mqttLastFull = 0;
+String mqttLastState;
+bool timeStarted = false;
+
+String mqttTopic(const char* t) { return "iotdev/" + deviceId + "/" + t; }
+
+void mqttCallback(char* topic, byte* payload, unsigned int len) {
+  JsonDocument d;
+  if (deserializeJson(d, payload, len)) return;
+  // команди мають бути підписані ключем плати — інакше їх ігноруємо
+  if (!apiKey.isEmpty() && String((const char*)(d["key"] | "")) != apiKey) return;
+  if (!d["cmds"].isNull()) applyCommands(d["cmds"]);
+  mqttLastState = "";  // одразу опублікувати новий стан
+}
+
+void mqttApplySettings() {
+  mqtt.disconnect();
+  mqttHost = prefs.getString("mq_host", "");
+  mqttPort = prefs.getUInt("mq_port", 8883);
+  mqttUser = prefs.getString("mq_user", "");
+  mqttPass = prefs.getString("mq_pass", "");
+  mqttEnabled = !mqttHost.isEmpty();
+  mqttStatus = mqttEnabled ? "connecting" : "off";
+  if (!mqttEnabled) return;
+  bool useTls = mqttPort != 1883;
+  if (useTls) {
+    bool verify = mqttHost.endsWith(".hivemq.cloud");
+#if defined(ESP8266)
+    mqttTlsClient.setBufferSizes(1024, 1024);
+    if (verify) { if (!mqttCa) mqttCa = new BearSSL::X509List(ISRG_ROOT_X1); mqttTlsClient.setTrustAnchors(mqttCa); }
+    else mqttTlsClient.setInsecure();
+#else
+    if (verify) mqttTlsClient.setCACert(ISRG_ROOT_X1); else mqttTlsClient.setInsecure();
+#endif
+    mqtt.setClient(mqttTlsClient);
+  } else {
+    mqtt.setClient(mqttPlainClient);
+  }
+  mqtt.setServer(mqttHost.c_str(), mqttPort);
+  mqtt.setCallback(mqttCallback);
+  mqtt.setBufferSize(2048);
+  mqtt.setKeepAlive(30);
+  mqttLastTry = 0;
+  mqttRetryMs = 5000;
+}
+
+void mqttLoop(uint32_t now) {
+  if (!mqttEnabled) return;
+  if (WiFi.status() != WL_CONNECTED) { mqttStatus = "no wifi"; return; }
+  if (!timeStarted) { configTime(0, 0, "pool.ntp.org", "time.google.com"); timeStarted = true; }
+  // для перевірки сертифіката потрібен правильний час
+  if (mqttPort != 1883 && time(nullptr) < 1700000000) { mqttStatus = "waiting time"; return; }
+  if (!mqtt.connected()) {
+    if (mqttLastTry && now - mqttLastTry < mqttRetryMs) return;
+    mqttLastTry = now;
+    String cid = deviceId + "-" + String((uint32_t)random(0xFFFFFF), HEX);
+    String st = mqttTopic("status");
+    if (!mqtt.connect(cid.c_str(), mqttUser.c_str(), mqttPass.c_str(), st.c_str(), 1, true, "offline")) {
+      mqttStatus = "error " + String(mqtt.state());
+      mqttRetryMs = mqttRetryMs * 2 > 120000 ? 120000 : mqttRetryMs * 2;
+      return;
+    }
+    mqttRetryMs = 5000;
+    mqttStatus = "connected";
+    mqtt.publish(st.c_str(), "online", true);
+    mqtt.publish(mqttTopic("info").c_str(), infoJson().c_str(), true);
+    mqtt.subscribe(mqttTopic("set").c_str(), 1);
+    mqttLastState = "";
+  }
+  mqtt.loop();
+  if (now - mqttLastCheck > 1000) {
+    mqttLastCheck = now;
+    String st = stateJson(false);
+    if (st != mqttLastState || now - mqttLastFull > 60000) {
+      mqttLastState = st;
+      mqttLastFull = now;
+      mqtt.publish(mqttTopic("state").c_str(), stateJson(true).c_str(), true);
+    }
+  }
+}
+
+void handleMqttPost() {
+  if (!requireAuth()) return;
+  JsonDocument doc;
+  if (!parseBody(doc)) return;
+  prefs.putString("mq_host", (const char*)(doc["host"] | ""));
+  prefs.putUInt("mq_port", doc["port"] | 8883);
+  prefs.putString("mq_user", (const char*)(doc["user"] | ""));
+  prefs.putString("mq_pass", (const char*)(doc["pass"] | ""));
+  mqttApplySettings();
+  sendJson(200, infoJson());
+}
+
 bool otaAuthorized = false;
 
 void setupServer() {
@@ -663,6 +785,7 @@ void setupServer() {
   server.on("/api/wifi", HTTP_POST, handleWifi);
   server.on("/api/scan", HTTP_GET, handleScan);
   server.on("/api/claim", HTTP_POST, handleClaim);
+  server.on("/api/mqtt", HTTP_POST, handleMqttPost);
   server.on("/api/reboot", HTTP_POST, []() {
     if (!requireAuth()) return;
     sendJson(200, "{\"ok\":true}");
@@ -772,6 +895,7 @@ void setup() {
   loadConfig();
 
   setupServer();
+  mqttApplySettings();
   if (wifiSsid.isEmpty()) startAp();
   else startSta();
   Serial.printf("IoT Devices %s, id %s\n", fwVersion(), deviceId.c_str());
@@ -859,6 +983,7 @@ void loop() {
   handleButtons(now);
   readSensors(now);
   handleThermostats(now);
+  mqttLoop(now);
 
   for (auto& c : comps) {
     if (c.type == C_RELAY && c.countdownEnd && (int32_t)(now - c.countdownEnd) >= 0) {
