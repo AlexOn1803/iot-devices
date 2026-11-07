@@ -171,6 +171,8 @@ fun SettingsScreen(nav: Nav) {
                 }
             }
 
+            MqttCard(snackbar)
+
             SectionCard("Загальне") {
                 OutlinedTextField(
                     tariffText,
@@ -224,6 +226,65 @@ fun SettingsScreen(nav: Nav) {
         importList = null
         scope.launch { snackbar.showSnackbar("Додано/оновлено: $count") }
     } }
+}
+
+@Composable
+private fun MqttCard(snackbar: SnackbarHostState) {
+    val app = IotApp.instance
+    val saved by app.storage.mqtt.collectAsState()
+    val status by app.controller.mqtt.status.collectAsState()
+    var host by remember { mutableStateOf(saved.host) }
+    var port by remember { mutableStateOf(saved.port.toString()) }
+    var user by remember { mutableStateOf(saved.user) }
+    var pass by remember { mutableStateOf(saved.pass) }
+    var show by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    fun current() = ua.madeisy.iot.esp.MqttSettings(host.trim(), port.toIntOrNull() ?: 8883, user.trim(), pass)
+
+    SectionCard("Плати ESP через інтернет (MQTT)") {
+        Text(
+            "Щоб керувати платами поза домом. Безкоштовно: hivemq.com → Sign up → Create Serverless Cluster → Access Management → додай логін і пароль (Publish and Subscribe). Адресу кластера скопіюй з Overview (…hivemq.cloud), порт 8883.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(host, { host = it.trim() }, label = { Text("Адреса брокера") }, singleLine = true,
+            placeholder = { Text("xxxx.s1.eu.hivemq.cloud") }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(port, { port = it.filter { c -> c.isDigit() }.take(5) }, label = { Text("Порт") }, singleLine = true,
+                modifier = Modifier.width(96.dp), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+            OutlinedTextField(user, { user = it }, label = { Text("Логін") }, singleLine = true, modifier = Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            pass, { pass = it }, label = { Text("Пароль") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = { IconButton(onClick = { show = !show }) { Icon(if (show) Icons.Filled.VisibilityOff else Icons.Filled.Visibility, "Показати") } },
+        )
+        Spacer(Modifier.height(4.dp))
+        Text("Стан: $status", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(enabled = !busy && host.isNotBlank(), modifier = Modifier.weight(1f), onClick = {
+                busy = true
+                scope.launch {
+                    val err = ua.madeisy.iot.esp.EspMqtt.test(current())
+                    busy = false
+                    snackbar.showSnackbar(err?.let { "Не вдалося: $it" } ?: "Брокер працює ✓")
+                }
+            }) { Text("Перевірити") }
+            Button(enabled = !busy, modifier = Modifier.weight(1f), onClick = {
+                app.storage.saveMqtt(current())
+                scope.launch { snackbar.showSnackbar(if (host.isBlank()) "MQTT вимкнено" else "Збережено. Плати отримають налаштування, щойно додаток побачить їх удома.") }
+            }) { Text("Зберегти") }
+        }
+        Text(
+            "Плата отримує ці налаштування від додатку, коли ви в одній мережі. Ключ доступу плати підписує кожну команду, тож чужі команди через брокер вона не виконає.",
+            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+    }
 }
 
 private fun canExactAlarms(ctx: Context): Boolean =

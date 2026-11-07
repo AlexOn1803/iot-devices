@@ -29,6 +29,20 @@ class Storage(context: Context) {
     private val _cloud = MutableStateFlow(loadCloud())
     val cloud: StateFlow<CloudSettings> = _cloud
 
+    private val _mqtt = MutableStateFlow(
+        ua.madeisy.iot.esp.MqttSettings(
+            host = prefs.getString("mqHost", "") ?: "", port = prefs.getInt("mqPort", 8883),
+            user = prefs.getString("mqUser", "") ?: "", pass = prefs.getString("mqPass", "") ?: "",
+        )
+    )
+    val mqtt: StateFlow<ua.madeisy.iot.esp.MqttSettings> = _mqtt
+
+    fun saveMqtt(m: ua.madeisy.iot.esp.MqttSettings) {
+        val t = m.copy(host = m.host.trim().removePrefix("ssl://").removePrefix("tcp://").substringBefore(':').trim(), user = m.user.trim())
+        prefs.edit().putString("mqHost", t.host).putInt("mqPort", t.port).putString("mqUser", t.user).putString("mqPass", t.pass).apply()
+        _mqtt.value = t
+    }
+
     private val _settings = MutableStateFlow(loadSettings())
     val settings: StateFlow<AppSettings> = _settings
 

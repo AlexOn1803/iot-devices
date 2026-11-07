@@ -210,12 +210,13 @@ data class EspInfo(
     val chip: String = "",
     /** Тип збірки прошивки: esp32c3, esp32, esp32s3, esp32s2, esp8266, esp01. */
     val board: String = "",
+    val mqtt: String = "",
 ) {
     companion object {
         fun fromJson(o: JSONObject) = EspInfo(
             id = o.optString("id"), name = o.optString("name"), fw = o.optString("fw"),
             ip = o.optString("ip"), rssi = o.optInt("rssi"), claimed = o.optBoolean("claimed"),
-            chip = o.optString("chip"), board = o.optString("board"),
+            chip = o.optString("chip"), board = o.optString("board"), mqtt = o.optString("mqtt"),
         )
     }
 }
@@ -227,6 +228,8 @@ data class EspState(
     val rssi: Int? = null,
     val updatedAt: Long = 0,
     val error: String? = null,
+    /** true — дані прийшли через інтернет (MQTT), а не напряму. */
+    val remote: Boolean = false,
 ) {
     /** Перший компонент, яким можна керувати однією кнопкою (для віджета й розкладу). */
     val primary: EspComp? get() = comps.firstOrNull { it.type == EspType.RELAY } ?: comps.firstOrNull { it.isSwitchable }

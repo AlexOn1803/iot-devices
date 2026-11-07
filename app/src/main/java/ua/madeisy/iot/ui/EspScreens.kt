@@ -167,7 +167,8 @@ private fun EspStatusLine(cfg: DeviceConfig, s: EspState) {
         Spacer(Modifier.width(6.dp))
         Text(
             when {
-                s.online -> "ESP32 · ${cfg.ip}" + (s.rssi?.let { " · $it dBm" } ?: "")
+                s.online && s.remote -> "Через інтернет (MQTT)" + (s.rssi?.let { " · $it dBm" } ?: "")
+                s.online -> "Напряму · ${cfg.ip}" + (s.rssi?.let { " · $it dBm" } ?: "")
                 s.connecting -> "Підключення…"
                 else -> s.error ?: "Офлайн"
             },
@@ -614,7 +615,17 @@ fun EspConfigScreen(key: String, nav: Nav) {
 
             HorizontalDivider()
             Text("Плата", style = MaterialTheme.typography.titleMedium)
-            Text("ID: ${original.deviceId}\nIP: ${original.ip}", style = MaterialTheme.typography.bodySmall)
+            var mqttInfo by remember { mutableStateOf<String?>(null) }
+            LaunchedEffect(key) { runCatching { mqttInfo = client.info().mqtt } }
+            Text(
+                "ID: ${original.deviceId}\nIP: ${original.ip}" + (mqttInfo?.let { "\nMQTT: " + when {
+                    it == "off" -> "вимкнено"
+                    it == "connected" -> "підключено"
+                    it.startsWith("error") -> "помилка ($it) — перевір логін/пароль"
+                    else -> it
+                } } ?: ""),
+                style = MaterialTheme.typography.bodySmall,
+            )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "Ключ: " + if (showKey) original.apiKey else "••••••••••••••••",

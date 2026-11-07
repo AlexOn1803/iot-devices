@@ -67,6 +67,12 @@ class EspClient(private val host: String, private val key: String) {
 
     suspend fun reboot() { call("POST", "/api/reboot", "{}") }
 
+    /** Передати плату налаштування брокера (порожній host — вимкнути MQTT). */
+    suspend fun setMqtt(s: MqttSettings): EspInfo = EspInfo.fromJson(
+        call("POST", "/api/mqtt", JSONObject().put("host", s.host).put("port", s.port)
+            .put("user", s.user).put("pass", s.pass).toString(), 8000)
+    )
+
     companion object {
         fun newKey(): String {
             val chars = "abcdefghjkmnpqrstuvwxyz23456789"

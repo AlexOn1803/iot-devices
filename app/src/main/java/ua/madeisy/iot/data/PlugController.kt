@@ -79,10 +79,23 @@ class PlugController(
     private var cloud: TuyaCloud? = null
     private var cloudFor: CloudSettings? = null
 
+    /** Доступ до плат через інтернет (MQTT-брокер). */
+    val mqtt = ua.madeisy.iot.esp.EspMqtt()
+
     init {
         scope.launch(Dispatchers.IO) {
             runCatching { history.prune(System.currentTimeMillis() - 31L * 24 * 3600 * 1000) }
         }
+        // новий стан з брокера — одразу показуємо для плат, які зараз не досяжні напряму
+        scope.launch {
+            mqtt.updates.collect { id ->
+                storage.devices.value.filter { it.isEsp && it.deviceId == id }.forEach { d ->
+                    val st = espState(d.key)
+                    if (synchronized(this@PlugController) { watchers.containsKey(d.key) } && (st.remote || !st.online)) applyRemote(d.key, d)
+                }
+            }
+        }
+        scope.launch { storage.mqtt.collect { ensureMqtt() } }
     }
 
     fun state(key: String): PlugState = _states.value[key] ?: PlugState()
@@ -169,41 +182,81 @@ class PlugController(
 
     private fun espClient(cfg: DeviceConfig) = EspClient(cfg.ip, cfg.apiKey)
 
-    private fun applyEspState(key: String, j: JSONObject) {
+    private fun ensureMqtt() {
+        val s = storage.mqtt.value
+        if (s.configured && storage.devices.value.any { it.isEsp }) mqtt.ensure(s) else if (!s.configured) mqtt.stop()
+    }
+
+    private fun applyEspState(key: String, j: JSONObject, remote: Boolean = false, at: Long = System.currentTimeMillis()) {
         espUpdate(key) {
             it.copy(
                 online = true, connecting = false, error = null,
                 comps = EspComp.listFromState(j),
                 rssi = j.optInt("rssi").takeIf { r -> r != 0 },
-                updatedAt = System.currentTimeMillis(),
+                updatedAt = at,
+                remote = remote,
             )
+        }
+    }
+
+    /** Показати стан, що прийшов через брокер (якщо свіжий). */
+    private fun applyRemote(key: String, cfg: DeviceConfig): Boolean {
+        val r = mqtt.remote(cfg.deviceId) ?: return false
+        if (!r.online || !r.state.has("comps") || System.currentTimeMillis() - r.at > 150_000) return false
+        applyEspState(key, r.state, remote = true, at = r.at)
+        return true
+    }
+
+    /** Передати плату налаштування брокера, якщо вони змінились. */
+    private suspend fun pushMqttIfNeeded(key: String, cfg: DeviceConfig) {
+        val s = storage.mqtt.value
+        if (cfg.mqttApplied == s.signature) return
+        runCatching { espClient(cfg).setMqtt(s) }.onSuccess {
+            storage.updateDevice(key) { it.copy(mqttApplied = s.signature) }
         }
     }
 
     private suspend fun runEspLoop(key: String) {
         var fails = 0
+        var lastLocalTry = 0L
+        ensureMqtt()
         while (currentCoroutineContext().isActive) {
             val cfg = storage.device(key) ?: return
-            if (cfg.ip.isBlank()) {
+            val now = System.currentTimeMillis()
+            // поза домом не смикаємо локальну адресу щодві секунди — лише раз на 20 с
+            val remoteNow = espState(key).remote && espState(key).online
+            if (cfg.ip.isNotBlank() && (!remoteNow || now - lastLocalTry > 20_000)) {
+                lastLocalTry = now
+                if (!espState(key).online) espUpdate(key) { it.copy(connecting = true) }
+                try {
+                    applyEspState(key, espClient(cfg).state())
+                    fails = 0
+                    pushMqttIfNeeded(key, cfg)
+                    delay(2000)
+                    continue
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    fails++
+                    if (e is EspHttpException && e.code == 401) {
+                        espUpdate(key) { it.copy(online = false, connecting = false, error = e.message) }
+                        delay(15_000); continue
+                    }
+                    if (!applyRemote(key, cfg)) espUpdate(key) { it.copy(online = false, connecting = false, error = e.message) }
+                    if (fails == 3 || fails % 10 == 0) espRediscover(key)
+                }
+            } else if (cfg.ip.isBlank()) {
                 espRediscover(key)
-                if (storage.device(key)?.ip.isNullOrBlank()) {
-                    espUpdate(key) { it.copy(online = false, error = "Плату не знайдено в мережі") }
-                    delay(10_000); continue
+                if (!applyRemote(key, cfg) && storage.device(key)?.ip.isNullOrBlank()) {
+                    espUpdate(key) { it.copy(online = false, connecting = false, error = "Плату не знайдено в мережі") }
+                }
+            } else {
+                // працюємо через брокер: перевіряємо, чи дані ще свіжі
+                if (!applyRemote(key, cfg)) espUpdate(key) {
+                    it.copy(online = false, connecting = false, remote = false,
+                        error = if (mqtt.connected) "Плата не на зв'язку (MQTT)" else "Немає зв'язку з брокером MQTT")
                 }
             }
-            if (!espState(key).online) espUpdate(key) { it.copy(connecting = true) }
-            try {
-                applyEspState(key, espClient(cfg).state())
-                fails = 0
-                delay(2000)
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                fails++
-                espUpdate(key) { it.copy(online = false, connecting = false, error = e.message) }
-                if (e is EspHttpException && e.code == 401) { delay(15_000); continue }
-                if (fails == 3 || fails % 10 == 0) espRediscover(key)
-                delay(if (fails < 3) 2000 else 8000)
-            }
+            delay(if (espState(key).remote) 3000 else if (fails < 3) 2000 else 8000)
         }
     }
 
@@ -215,16 +268,35 @@ class PlugController(
         if (found.host != cfg.ip) storage.updateDevice(key) { it.copy(ip = found.host) }
     }
 
-    /** Надіслати команди компонентам плати: напр. {"i":0,"on":true}. */
+    /** Надіслати команди компонентам плати: напр. {"i":0,"on":true}. Напряму, а поза домом — через MQTT. */
     suspend fun espSet(key: String, vararg commands: JSONObject): Result<Unit> {
         val cfg = storage.device(key) ?: return Result.failure(IOException("Пристрій не знайдено"))
-        return try {
-            applyEspState(key, espClient(cfg).set(commands.toList()))
-            Result.success(Unit)
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            Result.failure(e)
+        var err: Exception? = null
+        if (!espState(key).remote && cfg.ip.isNotBlank()) {
+            try {
+                applyEspState(key, espClient(cfg).set(commands.toList()))
+                return Result.success(Unit)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                err = e
+                if (e is EspHttpException) return Result.failure(e)
+            }
         }
+        if (mqtt.connected && mqtt.send(cfg.deviceId, cfg.apiKey, org.json.JSONArray(commands.toList()))) {
+            // оптимістично показуємо зміну, плата підтвердить новим станом за ~1 с
+            espUpdate(key) { st ->
+                st.copy(comps = st.comps.map { c ->
+                    val cmd = commands.firstOrNull { it.optInt("i", -1) == c.i } ?: return@map c
+                    when {
+                        cmd.has("on") -> c.copy(on = cmd.optBoolean("on"))
+                        cmd.optBoolean("toggle") -> c.copy(on = c.on != true)
+                        else -> c
+                    }
+                })
+            }
+            return Result.success(Unit)
+        }
+        return Result.failure(err ?: IOException("Плата недоступна ні напряму, ні через MQTT"))
     }
 
     private suspend fun espSwitch(key: String, on: Boolean?): Result<Unit> {
@@ -503,11 +575,13 @@ class PlugController(
     suspend fun refreshOnce(key: String): Result<PlugState> {
         val cfg = storage.device(key) ?: return Result.failure(IOException("Пристрій не знайдено"))
         if (cfg.isEsp) {
+            ensureMqtt()
             return try {
                 applyEspState(key, espClient(cfg).state())
                 Result.success(PlugState())
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
+                if (applyRemote(key, cfg)) return Result.success(PlugState())
                 espUpdate(key) { it.copy(online = false, error = e.message) }
                 Result.failure(e)
             }

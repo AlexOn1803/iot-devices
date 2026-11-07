@@ -81,6 +81,8 @@ data class DeviceConfig(
     val kind: DeviceKind = DeviceKind.TUYA,
     /** Ключ доступу до плати ESP (X-Key). */
     val apiKey: String = "",
+    /** Які налаштування MQTT уже передано на плату (підпис). */
+    val mqttApplied: String = "",
 ) {
     val isEsp: Boolean get() = kind == DeviceKind.ESP
 
@@ -99,7 +101,7 @@ data class DeviceConfig(
         .put("key", key).put("name", name).put("deviceId", deviceId).put("localKey", localKey)
         .put("ip", ip).put("version", version).put("mode", mode.name).put("dps", dps.toJson())
         .put("cloudCodes", JSONObject().apply { cloudCodes.forEach { (k, v) -> put(k.toString(), v) } })
-        .put("kind", kind.name).put("apiKey", apiKey)
+        .put("kind", kind.name).put("apiKey", apiKey).put("mqttApplied", mqttApplied)
 
     companion object {
         fun fromJson(j: JSONObject): DeviceConfig {
@@ -119,6 +121,7 @@ data class DeviceConfig(
                 cloudCodes = codes,
                 kind = DeviceKind.parse(j.optString("kind")),
                 apiKey = j.optString("apiKey"),
+                mqttApplied = j.optString("mqttApplied"),
             )
         }
     }
