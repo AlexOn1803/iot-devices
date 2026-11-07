@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">IoT Devices</string>
+    <string name="widget_name">Розетка</string>
+    <string name="widget_desc">Вмикання і потужність розетки</string>
+</resources>
