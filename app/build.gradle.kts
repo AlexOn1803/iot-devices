@@ -73,6 +73,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    // USB-serial для прошивки плат з телефона (CH340, CP210x, FTDI, CDC-ACM)
+    implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

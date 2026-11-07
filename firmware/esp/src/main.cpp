@@ -638,8 +638,12 @@ void handleScan() {
 bool otaAuthorized = false;
 
 void setupServer() {
+#if defined(ESP8266)
+  server.collectHeaders("X-Key");
+#else
   const char* headers[] = {"X-Key"};
   server.collectHeaders(headers, 1);
+#endif
 
   server.on("/", HTTP_GET, []() {
     server.send_P(200, "text/html; charset=utf-8", apMode ? PORTAL_HTML : CONTROL_HTML);
