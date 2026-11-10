@@ -89,7 +89,7 @@ object WidgetData {
     private fun espMetrics(c: EspComp): List<Metric> {
         val p = "c${c.i}"
         return when (c.type) {
-            EspType.RELAY, EspType.PWM, EspType.WS2812 ->
+            EspType.RELAY, EspType.PWM, EspType.WS2812, EspType.TUYA ->
                 listOf(Metric("$p:on", c.name, when (c.on) { true -> "Увімк."; false -> "Вимк."; null -> "—" }))
             EspType.DHT, EspType.AHT, EspType.BME, EspType.DS18B20, EspType.SHT21 -> buildList {
                 add(Metric("$p:temp", c.name, c.temp?.let { "${f1(it)} °C" } ?: "—"))
@@ -104,6 +104,7 @@ object WidgetData {
                     "on" -> if (c.heat) " · гріє" else " · охолоджує"
                     "off" -> " · очікує"
                     "nosensor" -> " · немає датчика"
+                    "offline" -> " · розетка недоступна"
                     else -> " · вимк."
                 }
                 listOf(Metric("$p:thermo", c.name, (c.temp?.let { "${f1(it)}°" } ?: "—") + st))

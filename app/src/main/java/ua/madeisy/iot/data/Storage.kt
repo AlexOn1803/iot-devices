@@ -37,6 +37,34 @@ class Storage(context: Context) {
     )
     val mqtt: StateFlow<ua.madeisy.iot.esp.MqttSettings> = _mqtt
 
+    /**
+     * Які розетки Tuya (ключі пристроїв) використовує кожна плата ESP. Такі розетки додаток
+     * не тримає постійним з'єднанням: розетка приймає лише одне, і воно потрібне платі.
+     */
+    private val _espLinks = MutableStateFlow(loadLinks())
+    val espLinks: StateFlow<Map<String, Set<String>>> = _espLinks
+
+    private fun loadLinks(): Map<String, Set<String>> = try {
+        val o = org.json.JSONObject(prefs.getString("espLinks", "{}") ?: "{}")
+        o.keys().asSequence().associateWith { k ->
+            val a = o.getJSONArray(k); (0 until a.length()).map { a.getString(it) }.toSet()
+        }
+    } catch (_: Exception) { emptyMap() }
+
+    fun setEspLinks(espKey: String, plugs: Set<String>) {
+        val m = _espLinks.value.toMutableMap()
+        if (plugs.isEmpty()) m.remove(espKey) else m[espKey] = plugs
+        if (m == _espLinks.value) return
+        val o = org.json.JSONObject()
+        m.forEach { (k, v) -> o.put(k, org.json.JSONArray(v.toList())) }
+        prefs.edit().putString("espLinks", o.toString()).apply()
+        _espLinks.value = m
+    }
+
+    /** Розетка використовується якоюсь платою ESP з цього телефона. */
+    fun isSharedWithEsp(plugKey: String): Boolean =
+        _espLinks.value.any { (esp, set) -> plugKey in set && device(esp) != null }
+
     fun saveMqtt(m: ua.madeisy.iot.esp.MqttSettings) {
         val t = m.copy(host = m.host.trim().removePrefix("ssl://").removePrefix("tcp://").substringBefore(':').trim(), user = m.user.trim())
         prefs.edit().putString("mqHost", t.host).putInt("mqPort", t.port).putString("mqUser", t.user).putString("mqPass", t.pass).apply()

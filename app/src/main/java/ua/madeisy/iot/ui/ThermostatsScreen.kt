@@ -117,7 +117,7 @@ fun ThermostatsScreen(nav: Nav) {
             }
             if (list.isEmpty()) {
                 Text(
-                    "Термостат вмикає розетку чи реле за температурою з датчика на платі ESP32 (DHT, DS18B20, AHT). Наприклад: нижче 18 °C — увімкнути обігрівач, від 19 °C — вимкнути.\n\nЯкщо датчик і реле на одній платі — краще додай компонент «Термостат» у налаштуваннях плати: він працюватиме на самій платі, без телефона.",
+                    "Термостат вмикає розетку чи реле за температурою з датчика на платі ESP32 (DHT, DS18B20, AHT). Наприклад: нижче 18 °C — увімкнути обігрівач, від 19 °C — вимкнути.\n\nЯкщо датчик і реле на одній платі — краще додай компонент «Термостат» у налаштуваннях плати: він працюватиме на самій платі, без телефона. Так само плата ESP32 може сама керувати розеткою Tuya: додай їй компонент «Розетка Tuya».",
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -230,6 +230,14 @@ private fun ThermostatDialog(initial: Thermostat, isNew: Boolean, onDismiss: () 
                     if (t.mode == ThermoMode.HEAT) "Поріг вимкнення має бути вищим за поріг увімкнення"
                     else "Поріг вимкнення має бути нижчим за поріг увімкнення",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                )
+                val sensorDev = devices.firstOrNull { it.key == t.sensorKey }
+                val targetDev = devices.firstOrNull { it.key == t.targetKey }
+                if (sensorDev != null && targetDev != null && !targetDev.isEsp) Text(
+                    "Цей термостат працює, лише поки додаток живий у фоні. Щоб плата «${sensorDev.name}» сама вмикала " +
+                        "«${targetDev.name}» навіть без телефона, у налаштуваннях плати додай компонент «Розетка Tuya» " +
+                        "і компонент «Термостат» з цією розеткою (потрібна ESP32/C3/S2/S3, не ESP8266).",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary,
                 )
                 Text(
                     "Між порогами стан не змінюється — так обігрівач не клацає щохвилини. Перемикання не частіше ніж раз на хвилину. Якщо датчик недоступний 5 хв, обігрів вимикається.",

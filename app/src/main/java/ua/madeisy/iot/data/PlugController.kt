@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import ua.madeisy.iot.esp.EspClient
 import ua.madeisy.iot.esp.EspComp
@@ -187,7 +188,41 @@ class PlugController(
         if (s.configured && storage.devices.value.any { it.isEsp }) mqtt.ensure(s) else if (!s.configured) mqtt.stop()
     }
 
+    private val linksChecked = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** Які розетки Tuya з цього телефона використовує плата — дізнаємось з її конфігу один раз за запуск. */
+    private fun checkEspLinks(key: String, j: JSONObject, remote: Boolean) {
+        val arr = j.optJSONArray("comps") ?: return
+        val hasTuya = (0 until arr.length()).any { arr.optJSONObject(it)?.optString("t") == "tuya" }
+        if (!hasTuya) {
+            if (storage.espLinks.value.containsKey(key)) storage.setEspLinks(key, emptySet())
+            return
+        }
+        if (remote || !linksChecked.add(key)) return
+        val cfg = storage.device(key) ?: return
+        scope.launch {
+            runCatching { espClient(cfg).getConfig() }.onSuccess { recordEspLinks(key, it) }.onFailure { linksChecked.remove(key) }
+        }
+    }
+
+    /** Запам'ятати розетки Tuya, вказані в конфігу плати ({"comps":[...]}). */
+    fun recordEspLinks(espKey: String, config: JSONObject) {
+        val arr = config.optJSONArray("comps") ?: JSONArray()
+        val devs = storage.devices.value
+        val plugs = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+            .filter { it.optString("t") == "tuya" }
+            .mapNotNull { o ->
+                val k = o.optString("dev"); val id = o.optString("id")
+                devs.firstOrNull { !it.isEsp && (it.key == k || (id.isNotBlank() && it.deviceId == id)) }?.key
+            }.toSet()
+        val before = storage.espLinks.value.values.flatten().toSet()
+        storage.setEspLinks(espKey, plugs)
+        // розетки, що щойно стали спільними (або перестали), перепідключаємо в потрібному режимі
+        (plugs - before + (before - storage.espLinks.value.values.flatten().toSet())).forEach { if (storage.device(it) != null) restart(it) }
+    }
+
     private fun applyEspState(key: String, j: JSONObject, remote: Boolean = false, at: Long = System.currentTimeMillis()) {
+        checkEspLinks(key, j, remote)
         espUpdate(key) {
             it.copy(
                 online = true, connecting = false, error = null,
@@ -349,7 +384,17 @@ class PlugController(
             val now = System.currentTimeMillis()
             val cloudPossible = cfg.mode != ConnectionMode.LOCAL && storage.cloud.value.configured && cfg.canCloudId
             val retryLocal = localFails < 2 || !cloudPossible || now - lastLocalTry > 60_000
-            if (cfg.mode != ConnectionMode.CLOUD && cfg.canLocal && retryLocal) {
+            if (cfg.mode != ConnectionMode.CLOUD && cfg.canLocal && retryLocal && storage.isSharedWithEsp(key)) {
+                // розеткою керує ще й плата ESP — підключаємось ненадовго, щоб не займати її єдине з'єднання
+                lastLocalTry = now
+                if (shortLocalPoll(key, cfg)) {
+                    localFails = 0
+                    delay(if (state(key).on == true) 10_000 else 15_000)
+                    continue
+                }
+                localFails++
+                if (localFails == 2 || cfg.ip.isBlank()) rediscover(key)
+            } else if (cfg.mode != ConnectionMode.CLOUD && cfg.canLocal && retryLocal) {
                 lastLocalTry = now
                 if (runLocalSession(key, cfg)) {
                     localFails = 0
@@ -368,6 +413,37 @@ class PlugController(
                 } else update(key) { it.copy(source = Source.NONE, connecting = false) }
                 delay(if (localFails < 3) 3000 else 10_000)
             }
+        }
+    }
+
+    /** Одне коротке опитування: підключитись, запитати стан, відключитись. */
+    private suspend fun shortLocalPoll(key: String, start: DeviceConfig): Boolean {
+        val cfg = if (start.ip.isBlank()) storage.device(key)?.takeIf { it.ip.isNotBlank() } ?: return false else start
+        if (state(key).updatedAt == 0L) update(key) { it.copy(connecting = true) }
+        return try {
+            val dps = oneShotLock.withLock {
+                val c = TuyaLocalClient(cfg.ip, cfg.deviceId, cfg.localKey, TuyaVersion.parse(cfg.version))
+                c.setQueryDps(listOf(cfg.dps.switch, cfg.dps.countdown) + cfg.dps.measured)
+                try {
+                    c.connect(3000)
+                    val d = c.query(3000)?.toMutableMap()
+                    // енергетичні DP деякі розетки віддають лише після запиту оновлення
+                    if (d != null && cfg.dps.measured.isNotEmpty()) coroutineScope {
+                        val job = launch { c.events.collect { ev -> if (ev is LocalEvent.Dps) d.putAll(ev.dps) } }
+                        runCatching { c.refresh(cfg.dps.measured) }
+                        delay(800)
+                        job.cancel()
+                    }
+                    d
+                } finally { c.close() }
+            }
+            if (dps == null) throw IOException("Розетка не відповідає — перевір local key і версію протоколу (${cfg.version})")
+            applyDps(key, cfg, dps, Source.LOCAL)
+            true
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            update(key) { it.copy(connecting = false, error = e.message) }
+            false
         }
     }
 

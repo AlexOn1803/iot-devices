@@ -17,11 +17,15 @@ enum class EspType(val code: String, val label: String, val hint: String) {
     THERMO("thermo", "Термостат", "Датчик цієї плати керує її реле — працює без телефона"),
     BME("bme", "BME280/BMP280", "Температура, вологість, тиск (I2C)"),
     SHT21("sht21", "SHT21/HTU21/Si7021", "Температура й вологість (I2C, GY-21)"),
+    TUYA("tuya", "Розетка Tuya", "Плата сама вмикає вашу розетку по Wi-Fi — без телефона (не для ESP8266)"),
     UNKNOWN("?", "Невідомо", "");
 
     companion object {
         fun parse(s: String?) = entries.firstOrNull { it.code == s } ?: UNKNOWN
-        val addable = listOf(RELAY, BUTTON, PWM, WS2812, DHT, DS18B20, AHT, BME, SHT21, ANALOG, INPUT, THERMO)
+        val addable = listOf(RELAY, BUTTON, PWM, WS2812, DHT, DS18B20, AHT, BME, SHT21, ANALOG, INPUT, THERMO, TUYA)
+        /** Чим можуть керувати термостат і кнопка на платі. */
+        val outputs = setOf(RELAY, TUYA)
+        fun supportsTuya(board: String) = board != "esp8266" && board != "esp01"
         val tempSensors = setOf(DHT, DS18B20, AHT, BME, SHT21)
         val i2c = setOf(AHT, BME, SHT21)
     }
@@ -50,6 +54,13 @@ data class EspCompConfig(
     val onAt: Double = 18.0,
     val offAt: Double = 19.0,
     val enabled: Boolean = true,
+    /** Розетка Tuya: ключ пристрою в додатку (щоб показати, яка саме) і локальні параметри. */
+    val tuyaKey: String = "",
+    val tuyaId: String = "",
+    val tuyaLocalKey: String = "",
+    val tuyaIp: String = "",
+    val tuyaVer: String = "3.3",
+    val tuyaDp: Int = 1,
 ) {
     fun toJson(): JSONObject {
         val o = JSONObject().put("t", type.code).put("name", name)
@@ -65,6 +76,8 @@ data class EspCompConfig(
             EspType.INPUT -> o.put("pin", pin).put("inv", inv).put("pull", pull)
             EspType.THERMO -> o.put("sensor", sensor).put("target", target).put("mode", if (heat) "heat" else "cool")
                 .put("onAt", onAt).put("offAt", offAt).put("enabled", enabled)
+            EspType.TUYA -> o.put("dev", tuyaKey).put("id", tuyaId).put("key", tuyaLocalKey).put("ip", tuyaIp)
+                .put("ver", tuyaVer).put("dp", tuyaDp)
             EspType.UNKNOWN -> {}
         }
         return o
@@ -73,7 +86,7 @@ data class EspCompConfig(
     /** Піни, які займає компонент. */
     val pins: List<Int> get() = when (type) {
         EspType.AHT, EspType.BME, EspType.SHT21 -> listOf(sda, scl)
-        EspType.THERMO -> emptyList()
+        EspType.THERMO, EspType.TUYA -> emptyList()
         else -> listOf(pin)
     }
 
@@ -91,6 +104,8 @@ data class EspCompConfig(
                 min = o.optInt("min", 0), max = o.optInt("max", 4095),
                 sensor = o.optInt("sensor", -1), heat = o.optString("mode", "heat") != "cool",
                 onAt = o.optDouble("onAt", 18.0), offAt = o.optDouble("offAt", 19.0), enabled = o.optBoolean("enabled", true),
+                tuyaKey = o.optString("dev"), tuyaId = o.optString("id"), tuyaLocalKey = o.optString("key"),
+                tuyaIp = o.optString("ip"), tuyaVer = o.optString("ver", "3.3"), tuyaDp = o.optInt("dp", 1),
             )
         }
 
@@ -185,8 +200,12 @@ data class EspComp(
     val target: Int = -1,
     val pres: Double? = null,
     val model: String? = null,
+    /** Розетка Tuya: чи відповідає, помилка, що чекає надсилання. */
+    val online: Boolean? = null,
+    val error: String? = null,
+    val pending: Boolean? = null,
 ) {
-    val isSwitchable: Boolean get() = type == EspType.RELAY || type == EspType.PWM || type == EspType.WS2812
+    val isSwitchable: Boolean get() = type == EspType.RELAY || type == EspType.PWM || type == EspType.WS2812 || type == EspType.TUYA
 
     companion object {
         private fun JSONObject.optDoubleOrNull(k: String): Double? =
@@ -208,6 +227,8 @@ data class EspComp(
                 thermoState = o.optString("state").ifEmpty { null },
                 sensor = o.optInt("sensor", -1), target = o.optInt("target", -1),
                 pres = o.optDoubleOrNull("pres"), model = o.optString("model").ifEmpty { null },
+                online = o.optBoolOrNull("online"), error = o.optString("err").ifEmpty { null },
+                pending = o.optBoolOrNull("pending"),
             )
         }
 

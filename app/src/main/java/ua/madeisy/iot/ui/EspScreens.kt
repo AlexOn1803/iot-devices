@@ -267,6 +267,32 @@ private fun EspCompCard(c: EspComp, s: EspState, send: (JSONObject) -> Unit) {
             }
             if (c.temp == null) Text("Датчик не відповідає — перевір підключення і пін", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
         }
+        EspType.TUYA -> SectionCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(c.name, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        when {
+                            c.pending != null -> if (c.pending) "Вмикаю…" else "Вимикаю…"
+                            c.online == false && c.error != null -> "Розетка не відповідає: ${tuyaErrorText(c.error)}"
+                            c.on == null -> "Чекаю відповіді розетки…"
+                            c.on -> "Увімкнено"
+                            else -> "Вимкнено"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (c.online == false) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = (c.pending ?: c.on) == true, onCheckedChange = { send(JSONObject().put("on", it)) },
+                    colors = SwitchDefaults.colors(checkedTrackColor = OnGreen),
+                )
+            }
+            Text(
+                "Плата керує розеткою Tuya напряму по Wi-Fi.",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         EspType.ANALOG -> SectionCard {
             Text(c.name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("${c.pct ?: 0} %", style = MaterialTheme.typography.displaySmall)
@@ -279,10 +305,14 @@ private fun EspCompCard(c: EspComp, s: EspState, send: (JSONObject) -> Unit) {
                     val relay = s.comps.firstOrNull { it.i == c.target }
                     Text(
                         (if (c.heat) "Обігрів" else "Охолодження") + " · " + (relay?.name ?: "реле ?") + ": " + when (c.thermoState) {
-                            "on" -> "працює"; "off" -> "вимкнено"; "nosensor" -> "немає даних з датчика"; else -> "термостат вимкнено"
+                            "on" -> "працює"; "off" -> "вимкнено"; "nosensor" -> "немає даних з датчика"
+                            "offline" -> "розетка не відповідає"; else -> "термостат вимкнено"
                         },
                         style = MaterialTheme.typography.bodySmall,
-                        color = when (c.thermoState) { "on" -> OnGreen; "nosensor" -> MaterialTheme.colorScheme.error; else -> MaterialTheme.colorScheme.onSurfaceVariant },
+                        color = when (c.thermoState) {
+                            "on" -> OnGreen; "nosensor", "offline" -> MaterialTheme.colorScheme.error
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                     )
                 }
                 Switch(checked = c.enabled == true, onCheckedChange = { send(JSONObject().put("enabled", it)) })
@@ -313,6 +343,17 @@ private fun EspCompCard(c: EspComp, s: EspState, send: (JSONObject) -> Unit) {
         }
         else -> {}
     }
+}
+
+/** Пояснення помилок, які повертає прошивка для розетки Tuya. */
+fun tuyaErrorText(e: String): String = when {
+    e.startsWith("no connection") -> "немає з'єднання (вимкнена або зайнята іншим застосунком)"
+    e.startsWith("IP unknown") -> "шукаю її в мережі"
+    e.contains("key") -> "не підходить local key або версія протоколу"
+    e.startsWith("decrypt") -> "не підходить local key"
+    e.startsWith("no reply") -> "не відповіла (перевір local key і версію)"
+    e.startsWith("ESP8266") -> "ESP8266 цього не вміє — потрібна ESP32"
+    else -> e
 }
 
 // ======================= додавання плати =======================
@@ -493,7 +534,11 @@ fun EspConfigScreen(key: String, nav: Nav) {
         busy = true
         scope.launch {
             try {
-                if (loaded) client.postConfig(EspCompConfig.listToJson(name.trim(), comps.toList()).apply { led?.let { put("led", it) } })
+                if (loaded) {
+                    val j = EspCompConfig.listToJson(name.trim(), comps.toList()).apply { led?.let { put("led", it) } }
+                    client.postConfig(j)
+                    app.controller.recordEspLinks(key, j)
+                }
                 app.storage.updateDevice(key) { it.copy(name = name.trim().ifEmpty { "ESP32" }) }
                 app.controller.restart(key)
                 busy = false
@@ -625,7 +670,8 @@ fun ComponentsEditor(comps: androidx.compose.runtime.snapshots.SnapshotStateList
                 Text(
                     c.type.label + " · " + when (c.type) {
                         EspType.AHT, EspType.BME, EspType.SHT21 -> "SDA ${c.sda}, SCL ${c.scl}"
-                        EspType.THERMO -> "датчик №${c.sensor} → реле №${c.target}"
+                        EspType.THERMO -> "датчик №${c.sensor} → №${c.target}"
+                        EspType.TUYA -> if (c.tuyaId.isBlank()) "розетку не вибрано" else "по Wi-Fi" + (c.tuyaIp.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
                         else -> EspCompConfig.pinLabel(c.pin, board)
                     } +
                         (if (c.type == EspType.BUTTON) " → №${c.target}" else "") +
@@ -650,7 +696,7 @@ fun ComponentsEditor(comps: androidx.compose.runtime.snapshots.SnapshotStateList
     Box {
         OutlinedButton(onClick = { addMenu = true }) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(4.dp)); Text("Додати компонент") }
         DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
-            EspType.addable.forEach { t ->
+            EspType.addable.filter { it != EspType.TUYA || EspType.supportsTuya(board) }.forEach { t ->
                 DropdownMenuItem(
                     text = { Column { Text(t.label); Text(t.hint, style = MaterialTheme.typography.bodySmall) } },
                     onClick = {
@@ -660,7 +706,7 @@ fun ComponentsEditor(comps: androidx.compose.runtime.snapshots.SnapshotStateList
                             if (t == EspType.THERMO) EspCompConfig(
                                 t,
                                 sensor = comps.indexOfFirst { it.type in EspType.tempSensors },
-                                target = comps.indexOfFirst { it.type == EspType.RELAY },
+                                target = comps.indexOfFirst { it.type in EspType.outputs },
                             ) else EspCompConfig(t, pin = free, max = EspCompConfig.adcMax(board))
                         )
                         editIndex = comps.lastIndex
@@ -728,7 +774,7 @@ private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompC
                     PinPicker("SDA", c.sda, board) { c = c.copy(sda = it) }
                     PinPicker("SCL", c.scl, board) { c = c.copy(scl = it) }
                     Text("Усі I2C-датчики на платі ділять одну шину — вкажи однакові SDA/SCL.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else if (c.type != EspType.THERMO) {
+                } else if (c.type != EspType.THERMO && c.type != EspType.TUYA) {
                     PinPicker("Пін", c.pin, board, analogOnly = c.type == EspType.ANALOG) { c = c.copy(pin = it) }
                 }
                 when (c.type) {
@@ -746,7 +792,7 @@ private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompC
                     EspType.BUTTON -> {
                         Text("Що перемикає", style = MaterialTheme.typography.labelLarge)
                         all.forEachIndexed { k, o ->
-                            if (k != index && (o.type == EspType.RELAY || o.type == EspType.PWM || o.type == EspType.WS2812)) {
+                            if (k != index && (o.type == EspType.RELAY || o.type == EspType.PWM || o.type == EspType.WS2812 || o.type == EspType.TUYA)) {
                                 Row(Modifier.fillMaxWidth().clickable { c = c.copy(target = k) }, verticalAlignment = Alignment.CenterVertically) {
                                     androidx.compose.material3.RadioButton(selected = c.target == k, onClick = { c = c.copy(target = k) })
                                     Text("$k. ${o.name}")
@@ -775,6 +821,7 @@ private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompC
                         CheckRow("Підтяжка до 3.3 В", c.pull) { c = c.copy(pull = it) }
                         CheckRow("Інвертувати", c.inv) { c = c.copy(inv = it) }
                     }
+                    EspType.TUYA -> TuyaPlugPicker(c) { c = it }
                     EspType.THERMO -> {
                         Text("Датчик температури", style = MaterialTheme.typography.labelLarge)
                         val sensors = all.withIndex().filter { it.value.type in EspType.tempSensors }
@@ -785,9 +832,12 @@ private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompC
                                 Text("$k. ${o.name}")
                             }
                         }
-                        Text("Реле", style = MaterialTheme.typography.labelLarge)
-                        val relays = all.withIndex().filter { it.value.type == EspType.RELAY }
-                        if (relays.isEmpty()) Text("Спершу додай реле", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        Text("Що вмикати", style = MaterialTheme.typography.labelLarge)
+                        val relays = all.withIndex().filter { it.value.type in EspType.outputs }
+                        if (relays.isEmpty()) Text(
+                            "Спершу додай реле" + if (EspType.supportsTuya(board)) " або розетку Tuya" else "",
+                            color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
+                        )
                         relays.forEach { (k, o) ->
                             Row(Modifier.fillMaxWidth().clickable { c = c.copy(target = k) }, verticalAlignment = Alignment.CenterVertically) {
                                 androidx.compose.material3.RadioButton(selected = c.target == k, onClick = { c = c.copy(target = k) })
@@ -816,7 +866,12 @@ private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompC
                 }
             }
         },
-        confirmButton = { TextButton(enabled = c.type != EspType.THERMO || c.thermoValid, onClick = { onSave(c) }) { Text("Готово") } },
+        confirmButton = {
+            TextButton(
+                enabled = (c.type != EspType.THERMO || c.thermoValid) && (c.type != EspType.TUYA || c.tuyaLocalKey.length == 16),
+                onClick = { onSave(c) },
+            ) { Text("Готово") }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Скасувати") } },
     )
 }
@@ -960,4 +1015,43 @@ private fun FirmwareSection(cfg: DeviceConfig) {
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("Скасувати") } },
         )
     }
+}
+
+
+/** Вибір розетки Tuya з доданих у додаток: плата отримає її ID, local key, IP і версію протоколу. */
+@Composable
+private fun TuyaPlugPicker(c: EspCompConfig, onChange: (EspCompConfig) -> Unit) {
+    val devices by IotApp.instance.storage.devices.collectAsState()
+    val plugs = devices.filter { !it.isEsp && it.canLocal }
+    Text("Яка розетка", style = MaterialTheme.typography.labelLarge)
+    if (plugs.isEmpty()) Text(
+        "Немає розеток з local key. Додай розетку Tuya в додаток (або імпортуй з хмари) — тоді її можна буде вибрати тут.",
+        color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
+    )
+    plugs.forEach { p ->
+        val sel = c.tuyaKey == p.key || (c.tuyaKey.isBlank() && c.tuyaId == p.deviceId)
+        Row(Modifier.fillMaxWidth().clickable {
+            onChange(
+                c.copy(
+                    name = if (c.name == EspType.TUYA.label || c.name.isBlank()) p.name else c.name,
+                    tuyaKey = p.key, tuyaId = p.deviceId, tuyaLocalKey = p.localKey, tuyaIp = p.ip,
+                    tuyaVer = p.version, tuyaDp = p.dps.switch,
+                )
+            )
+        }, verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.material3.RadioButton(selected = sel, onClick = null)
+            Column {
+                Text(p.name)
+                Text(
+                    "Протокол ${p.version}" + (p.ip.takeIf { it.isNotBlank() }?.let { " · $it" } ?: " · IP знайде сама"),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+    Text(
+        "Розетка має бути в тій самій Wi-Fi мережі, що й плата. Local key зберігається лише на платі й у додатку. " +
+            "Розетка Tuya приймає одне локальне з'єднання за раз, тому додаток підключатиметься до неї ненадовго, щоб не заважати платі.",
+        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
