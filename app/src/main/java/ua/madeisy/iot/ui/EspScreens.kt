@@ -469,8 +469,6 @@ fun EspConfigScreen(key: String, nav: Nav) {
     var loaded by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
-    var addMenu by remember { mutableStateOf(false) }
-    var editIndex by remember { mutableStateOf<Int?>(null) }
     var confirmDelete by remember { mutableStateOf(false) }
     var showKey by remember { mutableStateOf(false) }
     val client = remember(original) { EspClient(original.ip, original.apiKey) }
@@ -507,8 +505,6 @@ fun EspConfigScreen(key: String, nav: Nav) {
         }
     }
 
-    val usedPins = comps.flatMap { it.pins }.groupingBy { it }.eachCount()
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -534,113 +530,12 @@ fun EspConfigScreen(key: String, nav: Nav) {
                     Spacer(Modifier.width(8.dp)); Text("Читаю конфігурацію плати…")
                 }
             } else {
-                Text("Компоненти", style = MaterialTheme.typography.titleMedium)
-                if (comps.isEmpty()) Text(
-                    "Ще нічого. Додай, що підключено до плати. Можна почати з шаблону:",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (comps.isEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // типові піни під кожну плату
-                    val relayPin = if (board == "esp01") 0 else 5
-                    val buttonPin = when (board) { "esp8266" -> 12; "esp01" -> 2; else -> 4 }
-                    val dhtPin = when (board) { "esp8266" -> 14; "esp01" -> 2; "esp32c3" -> 3; else -> 4 }
-                    val stripPin = when (board) { "esp8266" -> 13; "esp01" -> 2; "esp32" -> 18; else -> 7 }
-                    AssistChip(onClick = { comps.add(EspCompConfig(EspType.RELAY, "Реле", pin = relayPin, inv = board == "esp01")) }, label = { Text("Реле") })
-                    AssistChip(onClick = {
-                        comps.add(EspCompConfig(EspType.RELAY, "Реле", pin = relayPin, inv = board == "esp01"))
-                        comps.add(EspCompConfig(EspType.BUTTON, "Кнопка", pin = buttonPin, target = comps.lastIndex))
-                    }, label = { Text("Реле + кнопка") })
-                    AssistChip(onClick = { comps.add(EspCompConfig(EspType.DHT, "Температура", pin = dhtPin)) }, label = { Text("DHT22") })
-                    AssistChip(onClick = { comps.add(EspCompConfig(EspType.WS2812, "Стрічка", pin = stripPin, count = 30)) }, label = { Text("Стрічка WS2812") })
-                    AssistChip(onClick = { comps.add(EspCompConfig(EspType.PWM, "LED на платі", pin = if (board == "esp32c3") 8 else 2, inv = board == "esp32c3" || board.startsWith("esp8266"))) }, label = { Text("LED на платі") })
-                    AssistChip(onClick = { comps.add(EspCompConfig(EspType.BME, "Клімат", sda = if (board.startsWith("esp8266")) 4 else 6, scl = if (board.startsWith("esp8266")) 5 else 7)) }, label = { Text("BME280") })
-                    if (board == "esp01") AssistChip(onClick = {
-                        comps.add(EspCompConfig(EspType.RELAY, "Реле", pin = 0, inv = true))
-                    }, label = { Text("ESP-01S реле") })
-                }
-                comps.forEachIndexed { i, c ->
-                    val conflict = c.pins.any { (usedPins[it] ?: 0) > 1 }
-                    ListItem(
-                        headlineContent = { Text("$i. ${c.name}") },
-                        supportingContent = {
-                            Text(
-                                c.type.label + " · " + when (c.type) {
-                                    EspType.AHT, EspType.BME -> "SDA ${c.sda}, SCL ${c.scl}"
-                                    EspType.THERMO -> "датчик №${c.sensor} → реле №${c.target}"
-                                    else -> EspCompConfig.pinLabel(c.pin, board)
-                                } +
-                                    (if (c.type == EspType.BUTTON) " → №${c.target}" else "") +
-                                    (if (conflict) " · ⚠ пін зайнятий" else ""),
-                                color = if (conflict) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        },
-                        trailingContent = {
-                            IconButton(onClick = {
-                                comps.removeAt(i)
-                                // посилання на інші компоненти — за індексом, тож зсуваємо їх
-                                fun fix(x: Int) = when { x == i -> -1; x > i -> x - 1; else -> x }
-                                for (k in comps.indices) {
-                                    val o = comps[k]
-                                    if (o.type == EspType.BUTTON || o.type == EspType.THERMO) comps[k] = o.copy(target = fix(o.target), sensor = fix(o.sensor))
-                                }
-                            }) { Icon(Icons.Filled.Delete, "Прибрати") }
-                        },
-                        modifier = Modifier.clickable { editIndex = i },
-                    )
-                }
-                Box {
-                    OutlinedButton(onClick = { addMenu = true }) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(4.dp)); Text("Додати компонент") }
-                    DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
-                        EspType.addable.forEach { t ->
-                            DropdownMenuItem(
-                                text = { Column { Text(t.label); Text(t.hint, style = MaterialTheme.typography.bodySmall) } },
-                                onClick = {
-                                    addMenu = false
-                                    val free = EspCompConfig.pinsFor(board).firstOrNull { it !in usedPins && EspCompConfig.pinHint(it, board)?.contains("strap") != true } ?: 0
-                                    comps.add(
-                                        if (t == EspType.THERMO) EspCompConfig(
-                                            t,
-                                            sensor = comps.indexOfFirst { it.type in EspType.tempSensors },
-                                            target = comps.indexOfFirst { it.type == EspType.RELAY },
-                                        ) else EspCompConfig(t, pin = free, max = EspCompConfig.adcMax(board))
-                                    )
-                                    editIndex = comps.lastIndex
-                                },
-                            )
-                        }
-                    }
-                }
-                Text(
-                    when (board) {
-                        "esp8266" -> "Wemos D1 mini: найбезпечніші D1, D2, D5, D6, D7. D3/D4/D8 впливають на завантаження, D4 — світлодіод. A0 — аналог до 1 В (на D1 mini — до 3.3 В через дільник). I2C: D2 = SDA, D1 = SCL."
-                        "esp01" -> "ESP-01: доступні GPIO0, GPIO2 і (якщо не потрібен UART) RX=3, TX=1. GPIO0 і GPIO2 мають бути HIGH при старті. На ESP-01S Relay реле на GPIO0, вмикається низьким рівнем (якщо навпаки — зніми «Інвертувати»)."
-                        "esp32" -> "ESP32: 34–39 лише входи. 0, 2, 12, 15 впливають на завантаження. Аналогові — 32–39."
-                        "esp32s2", "esp32s3" -> "ESP32-S2/S3: аналогові 1–10. 0 — BOOT, 19/20 зайняті USB."
-                        else -> "ESP32-C3: піни 0–10, 20, 21. Аналогові — лише 0–4. 9 — кнопка BOOT, 8 — світлодіод на більшості плат, 2/8/9 впливають на завантаження."
-                    },
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                ComponentsEditor(comps, board)
             }
 
             HorizontalDivider()
             led?.let { l ->
-                Text("Світлодіод стану", style = MaterialTheme.typography.titleMedium)
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "Мигає — підключається до Wi-Fi, світить — роздає мережу IoT-Setup, не світить — усе гаразд.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Switch(checked = l.optBoolean("en", true), onCheckedChange = { led = JSONObject(l.toString()).put("en", it) })
-                }
-                if (l.optBoolean("en", true)) {
-                    PinPicker("Пін світлодіода", l.optInt("pin", -1), board) { p -> led = JSONObject(l.toString()).put("pin", p) }
-                    CheckRow("Світиться низьким рівнем (на більшості плат з синім LED)", l.optBoolean("inv")) { v -> led = JSONObject(l.toString()).put("inv", v) }
-                    if (l.optInt("pin", -1) in comps.flatMap { it.pins }) Text(
-                        "Цей пін зайнятий компонентом — світлодіод стану не працюватиме.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
-                    )
-                }
+                LedEditor(l, board, comps) { led = it }
                 HorizontalDivider()
             }
             Text("Плата", style = MaterialTheme.typography.titleMedium)
@@ -675,18 +570,6 @@ fun EspConfigScreen(key: String, nav: Nav) {
         }
     }
 
-    editIndex?.let { i ->
-        if (i in comps.indices) {
-            EspCompDialog(
-                initial = comps[i], index = i, all = comps.toList(), board = board,
-                onDismiss = { editIndex = null },
-                onSave = { comps[i] = it; editIndex = null },
-            )
-        } else {
-            editIndex = null
-        }
-    }
-
     if (confirmDelete) {
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
@@ -698,6 +581,135 @@ fun EspConfigScreen(key: String, nav: Nav) {
                 }) { Text("Видалити") }
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Скасувати") } },
+        )
+    }
+}
+
+
+/** Список компонентів плати з шаблонами й діалогом редагування (і для налаштування, і перед прошивкою). */
+@Composable
+fun ComponentsEditor(comps: androidx.compose.runtime.snapshots.SnapshotStateList<EspCompConfig>, board: String) {
+    var addMenu by remember { mutableStateOf(false) }
+    var editIndex by remember { mutableStateOf<Int?>(null) }
+    val usedPins = comps.flatMap { it.pins }.groupingBy { it }.eachCount()
+    Text("Компоненти", style = MaterialTheme.typography.titleMedium)
+    if (comps.isEmpty()) Text(
+        "Ще нічого. Додай, що підключено до плати. Можна почати з шаблону:",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (comps.isEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // типові піни під кожну плату
+        val relayPin = if (board == "esp01") 0 else 5
+        val buttonPin = when (board) { "esp8266" -> 12; "esp01" -> 2; else -> 4 }
+        val dhtPin = when (board) { "esp8266" -> 14; "esp01" -> 2; "esp32c3" -> 3; else -> 4 }
+        val stripPin = when (board) { "esp8266" -> 13; "esp01" -> 2; "esp32" -> 18; else -> 7 }
+        AssistChip(onClick = { comps.add(EspCompConfig(EspType.RELAY, "Реле", pin = relayPin, inv = board == "esp01")) }, label = { Text("Реле") })
+        AssistChip(onClick = {
+            comps.add(EspCompConfig(EspType.RELAY, "Реле", pin = relayPin, inv = board == "esp01"))
+            comps.add(EspCompConfig(EspType.BUTTON, "Кнопка", pin = buttonPin, target = comps.lastIndex))
+        }, label = { Text("Реле + кнопка") })
+        AssistChip(onClick = { comps.add(EspCompConfig(EspType.DHT, "Температура", pin = dhtPin)) }, label = { Text("DHT22") })
+        AssistChip(onClick = { comps.add(EspCompConfig(EspType.WS2812, "Стрічка", pin = stripPin, count = 30)) }, label = { Text("Стрічка WS2812") })
+        AssistChip(onClick = { comps.add(EspCompConfig(EspType.PWM, "LED на платі", pin = if (board == "esp32c3") 8 else 2, inv = board == "esp32c3" || board.startsWith("esp8266"))) }, label = { Text("LED на платі") })
+        AssistChip(onClick = { comps.add(EspCompConfig(EspType.BME, "Клімат", sda = if (board.startsWith("esp8266")) 4 else 6, scl = if (board.startsWith("esp8266")) 5 else 7)) }, label = { Text("BME280") })
+        if (board == "esp01") AssistChip(onClick = {
+            comps.add(EspCompConfig(EspType.RELAY, "Реле", pin = 0, inv = true))
+        }, label = { Text("ESP-01S реле") })
+    }
+    comps.forEachIndexed { i, c ->
+        val conflict = c.pins.any { (usedPins[it] ?: 0) > 1 }
+        ListItem(
+            headlineContent = { Text("$i. ${c.name}") },
+            supportingContent = {
+                Text(
+                    c.type.label + " · " + when (c.type) {
+                        EspType.AHT, EspType.BME -> "SDA ${c.sda}, SCL ${c.scl}"
+                        EspType.THERMO -> "датчик №${c.sensor} → реле №${c.target}"
+                        else -> EspCompConfig.pinLabel(c.pin, board)
+                    } +
+                        (if (c.type == EspType.BUTTON) " → №${c.target}" else "") +
+                        (if (conflict) " · ⚠ пін зайнятий" else ""),
+                    color = if (conflict) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            },
+            trailingContent = {
+                IconButton(onClick = {
+                    comps.removeAt(i)
+                    // посилання на інші компоненти — за індексом, тож зсуваємо їх
+                    fun fix(x: Int) = when { x == i -> -1; x > i -> x - 1; else -> x }
+                    for (k in comps.indices) {
+                        val o = comps[k]
+                        if (o.type == EspType.BUTTON || o.type == EspType.THERMO) comps[k] = o.copy(target = fix(o.target), sensor = fix(o.sensor))
+                    }
+                }) { Icon(Icons.Filled.Delete, "Прибрати") }
+            },
+            modifier = Modifier.clickable { editIndex = i },
+        )
+    }
+    Box {
+        OutlinedButton(onClick = { addMenu = true }) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(4.dp)); Text("Додати компонент") }
+        DropdownMenu(expanded = addMenu, onDismissRequest = { addMenu = false }) {
+            EspType.addable.forEach { t ->
+                DropdownMenuItem(
+                    text = { Column { Text(t.label); Text(t.hint, style = MaterialTheme.typography.bodySmall) } },
+                    onClick = {
+                        addMenu = false
+                        val free = EspCompConfig.pinsFor(board).firstOrNull { it !in usedPins && EspCompConfig.pinHint(it, board)?.contains("strap") != true } ?: 0
+                        comps.add(
+                            if (t == EspType.THERMO) EspCompConfig(
+                                t,
+                                sensor = comps.indexOfFirst { it.type in EspType.tempSensors },
+                                target = comps.indexOfFirst { it.type == EspType.RELAY },
+                            ) else EspCompConfig(t, pin = free, max = EspCompConfig.adcMax(board))
+                        )
+                        editIndex = comps.lastIndex
+                    },
+                )
+            }
+        }
+    }
+    Text(
+        when (board) {
+            "esp8266" -> "Wemos D1 mini: найбезпечніші D1, D2, D5, D6, D7. D3/D4/D8 впливають на завантаження, D4 — світлодіод. A0 — аналог до 1 В (на D1 mini — до 3.3 В через дільник). I2C: D2 = SDA, D1 = SCL."
+            "esp01" -> "ESP-01: доступні GPIO0, GPIO2 і (якщо не потрібен UART) RX=3, TX=1. GPIO0 і GPIO2 мають бути HIGH при старті. На ESP-01S Relay реле на GPIO0, вмикається низьким рівнем (якщо навпаки — зніми «Інвертувати»)."
+            "esp32" -> "ESP32: 34–39 лише входи. 0, 2, 12, 15 впливають на завантаження. Аналогові — 32–39."
+            "esp32s2", "esp32s3" -> "ESP32-S2/S3: аналогові 1–10. 0 — BOOT, 19/20 зайняті USB."
+            else -> "ESP32-C3: піни 0–10, 20, 21. Аналогові — лише 0–4. 9 — кнопка BOOT, 8 — світлодіод на більшості плат, 2/8/9 впливають на завантаження."
+        },
+        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+
+    editIndex?.let { i ->
+        if (i in comps.indices) {
+            EspCompDialog(
+                initial = comps[i], index = i, all = comps.toList(), board = board,
+                onDismiss = { editIndex = null },
+                onSave = { comps[i] = it; editIndex = null },
+            )
+        } else {
+            editIndex = null
+        }
+    }
+}
+
+/** Налаштування світлодіода стану: {"en","pin","inv"}. */
+@Composable
+fun LedEditor(l: JSONObject, board: String, comps: List<EspCompConfig>, onChange: (JSONObject) -> Unit) {
+    Text("Світлодіод стану", style = MaterialTheme.typography.titleMedium)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            "Мигає — підключається до Wi-Fi, світить — роздає мережу IoT-Setup, не світить — усе гаразд.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Switch(checked = l.optBoolean("en", true), onCheckedChange = { onChange(JSONObject(l.toString()).put("en", it)) })
+    }
+    if (l.optBoolean("en", true)) {
+        PinPicker("Пін світлодіода", l.optInt("pin", -1), board) { p -> onChange(JSONObject(l.toString()).put("pin", p)) }
+        CheckRow("Світиться низьким рівнем (на більшості плат з синім LED)", l.optBoolean("inv")) { v -> onChange(JSONObject(l.toString()).put("inv", v)) }
+        if (l.optInt("pin", -1) in comps.flatMap { it.pins }) Text(
+            "Цей пін зайнятий компонентом — світлодіод стану не працюватиме.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
         )
     }
 }

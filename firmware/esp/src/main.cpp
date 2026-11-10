@@ -899,6 +899,57 @@ void factoryReset() {
   ESP.restart();
 }
 
+// ---------------- налаштування, записані разом із прошивкою ----------------
+// Додаток пише окремий сектор: "IOTCFG1\n" + JSON + '\0'. Плата застосовує його на першому старті й стирає.
+// ESP32: початок розділу spiffs (0x290000 у default.csv); ESP8266: сектор EEPROM (адресу перевіряє CI).
+#if defined(ESP8266)
+extern "C" uint32_t _EEPROM_start;
+static uint32_t blobAddr() { return (uint32_t)&_EEPROM_start - 0x40200000; }
+static bool blobRead(uint32_t* buf, size_t n) { return ESP.flashRead(blobAddr(), buf, n); }
+static void blobErase() { ESP.flashEraseSector(blobAddr() / 4096); }
+#else
+#include "esp_partition.h"
+static const esp_partition_t* blobPart() {
+  return esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, NULL);
+}
+static bool blobRead(uint32_t* buf, size_t n) { auto p = blobPart(); return p && esp_partition_read(p, 0, buf, n) == ESP_OK; }
+static void blobErase() { auto p = blobPart(); if (p) esp_partition_erase_range(p, 0, 4096); }
+#endif
+
+static uint32_t blobBuf[1024];   // 4 КБ, вирівняно під читання флешу
+
+void applyFlashedSettings() {
+  if (!blobRead(blobBuf, sizeof(blobBuf))) return;
+  char* b = (char*)blobBuf;
+  if (memcmp(b, "IOTCFG1\n", 8) != 0) return;
+  b[sizeof(blobBuf) - 1] = 0;
+  JsonDocument d;
+  if (!deserializeJson(d, b + 8)) {
+    if (d["ssid"].is<const char*>()) {
+      prefs.putString("ssid", (const char*)d["ssid"]);
+      prefs.putString("pass", (const char*)(d["pass"] | ""));
+    }
+    if (d["name"].is<const char*>()) prefs.putString("name", (const char*)d["name"]);
+    if (d["key"].is<const char*>() && strlen((const char*)d["key"]) >= 8) prefs.putString("key", (const char*)d["key"]);
+    if (d["comps"].is<JsonArray>()) {
+      JsonDocument cfg;
+      cfg["comps"] = d["comps"];
+      String c; serializeJson(cfg, c);
+      prefs.putString("cfg", c);
+      prefs.putUInt("rs", 0);
+    }
+    if (d["led"].is<JsonObject>()) { String l; serializeJson(d["led"], l); prefs.putString("led", l); }
+    if (d["mqtt"].is<JsonObject>()) {
+      prefs.putString("mq_host", (const char*)(d["mqtt"]["host"] | ""));
+      prefs.putUInt("mq_port", d["mqtt"]["port"] | 8883);
+      prefs.putString("mq_user", (const char*)(d["mqtt"]["user"] | ""));
+      prefs.putString("mq_pass", (const char*)(d["mqtt"]["pass"] | ""));
+    }
+    Serial.println("IOTDEV-APPLIED settings from flash");
+  }
+  blobErase();
+}
+
 // ---------------- setup / loop ----------------
 
 void setup() {
@@ -916,6 +967,7 @@ void setup() {
   deviceId = buf;
 
   prefs.begin();
+  applyFlashedSettings();
   deviceName = prefs.getString("name", String("IoT ") + CHIP_NAME);
   wifiSsid = prefs.getString("ssid", "");
   wifiPass = prefs.getString("pass", "");

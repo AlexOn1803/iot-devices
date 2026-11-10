@@ -81,6 +81,9 @@ jobs:
           FW_VERSION: 1.0.${{ github.run_number }}
         run: pio run -e ${{ matrix.board }}
 
+      - name: Check settings-blob address
+        run: python3 tools/check_blob_addr.py ${{ matrix.board }} firmware/esp/.pio/build/${{ matrix.board }}
+
       - name: Make flashable images
         working-directory: firmware/esp
         run: |
