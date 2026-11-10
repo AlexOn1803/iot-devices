@@ -338,13 +338,14 @@ class EspLoader(private val port: LoaderPort, private val log: (String) -> Unit 
 
     /**
      * Вийти із завантажувача й запустити прошивку без скидання (для адаптерів без лінії RTS).
-     * Як `esptool run`: порожній FLASH_BEGIN, потім FLASH_END з параметром 1 — «запустити код».
+     * Як `esptool run`: порожній FLASH_BEGIN, потім FLASH_END з параметром 0 — «перезапуститись у прошивку»
+     * (1 означало б «лишитись у завантажувачі»). Спрацює, лише якщо GPIO0 уже не на GND.
      */
     fun runApp() {
         val c = chip ?: return
         runCatching {
             checkCommand("старт", FLASH_BEGIN, le(0, 0, WRITE_BLOCK, 0) + if (c.extParams) le(0) else ByteArray(0))
-            command(FLASH_END, le(1), timeoutMs = 500)
+            command(FLASH_END, le(0), timeoutMs = 500)
         }
     }
 

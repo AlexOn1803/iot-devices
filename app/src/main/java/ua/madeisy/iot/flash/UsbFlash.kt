@@ -125,7 +125,8 @@ object UsbFlash {
         withContext(Dispatchers.IO) {
             var id: String? = null
             val sb = StringBuilder()
-            val deadline = System.currentTimeMillis() + 15_000
+            val deadline = System.currentTimeMillis() + 25_000
+            var shown = 0
             var lastInfo = 0L
             var wifiSent = false
             while (System.currentTimeMillis() < deadline) {
@@ -146,6 +147,8 @@ object UsbFlash {
                         }
                         line.startsWith("IOTDEV-OK") -> return@withContext id
                         line.startsWith("IOTDEV-ERR") -> { log(line); return@withContext null }
+                        // решту виводу плати показуємо в журналі — так видно, чи вона взагалі стартує
+                        line.isNotBlank() && shown < 12 -> { shown++; log("плата: " + line.take(80)) }
                     }
                 }
             }

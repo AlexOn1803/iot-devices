@@ -41,6 +41,25 @@ uint32_t lastStaOk = 0;
 bool restartPending = false;
 uint32_t restartAt = 0;
 String mqttStatus = "off";
+
+// ---------------- світлодіод стану ----------------
+// мигає 1 с / 1 с — підключається до Wi-Fi; світить постійно — роздає свою мережу; не світить — у мережі
+int ledPin = -1;
+bool ledInv = false, ledRgb = false, ledEn = true, ledActive = false, ledLevel = false;
+
+void ledDefaults() {
+  String b = FW_BOARD;
+  ledRgb = false;
+  if (b == "esp32c3") { ledPin = 8; ledInv = true; }          // C3 SuperMini, активний LOW
+  else if (b == "esp32") { ledPin = 2; ledInv = false; }
+  else if (b == "esp32s2") { ledPin = 15; ledInv = false; }   // Lolin S2 mini
+  else if (b == "esp32s3") { ledPin = 48; ledInv = false; ledRgb = true; }  // RGB на DevKitC
+  else if (b == "esp8266" || b == "esp01") { ledPin = 2; ledInv = true; }
+  else ledPin = -1;
+}
+void ledLoad();
+void ledWrite(bool on);
+bool pinUsed(int p);
 String mqttHost;
 
 // ---------------- компоненти ----------------
@@ -582,6 +601,13 @@ void handleConfigPost() {
   if (!requireAuth()) return;
   JsonDocument doc;
   if (!parseBody(doc)) return;
+  if (doc["led"].is<JsonObject>()) {
+    // старий пін відпускаємо (гасимо), новий підхопить ledLoop
+    if (ledActive && validPin(ledPin) && !pinUsed(ledPin)) ledWrite(false);
+    String l; serializeJson(doc["led"], l);
+    prefs.putString("led", l);
+    ledLoad();
+  }
   if (doc["name"].is<const char*>()) {
     deviceName = (const char*)doc["name"];
     prefs.putString("name", deviceName);
@@ -778,6 +804,8 @@ void setupServer() {
     JsonDocument doc;
     deserializeJson(doc, configJson);
     doc["name"] = deviceName;
+    JsonObject l = doc["led"].to<JsonObject>();
+    l["en"] = ledEn; l["pin"] = ledPin; l["inv"] = ledInv; l["rgb"] = ledRgb;
     String s; serializeJson(doc, s);
     sendJson(200, s);
   });
@@ -893,6 +921,7 @@ void setup() {
   wifiPass = prefs.getString("pass", "");
   apiKey = prefs.getString("key", "");
   loadConfig();
+  ledLoad();
 
   setupServer();
   mqttApplySettings();
@@ -907,6 +936,37 @@ uint32_t bootPressedAt = 0;
 bool pinUsed(int p) {
   for (auto& c : comps) if (c.pin == p || (c.type == C_AHT || c.type == C_BME ? c.pin2 == p : false)) return true;
   return false;
+}
+
+void ledWrite(bool on) {
+#if !defined(ESP8266)
+  if (ledRgb) { neopixelWrite(ledPin, 0, 0, on ? 40 : 0); return; }
+#endif
+  digitalWrite(ledPin, (on != ledInv) ? HIGH : LOW);
+}
+
+void ledLoad() {
+  ledDefaults();
+  JsonDocument d;
+  if (!deserializeJson(d, prefs.getString("led", "")) && d.is<JsonObject>()) {
+    ledEn = d["en"] | true;
+    ledPin = d["pin"] | ledPin;
+    ledInv = d["inv"] | ledInv;
+    ledRgb = d["rgb"] | ledRgb;
+  }
+  ledActive = false;
+}
+
+void ledLoop(uint32_t now) {
+  // світлодіод вимкнено в налаштуваннях або його пін зайняв компонент — не чіпаємо
+  bool usable = ledEn && validPin(ledPin) && !pinUsed(ledPin);
+  if (!usable) { ledActive = false; return; }
+  if (!ledActive) { pinMode(ledPin, OUTPUT); ledActive = true; ledLevel = !ledLevel; }
+  bool want;
+  if (apMode) want = true;
+  else if (!wifiSsid.isEmpty() && WiFi.status() != WL_CONNECTED) want = (now / 1000) % 2 == 0;
+  else want = false;
+  if (want != ledLevel) { ledLevel = want; ledWrite(want); }
 }
 
 /**
@@ -984,6 +1044,7 @@ void loop() {
   readSensors(now);
   handleThermostats(now);
   mqttLoop(now);
+  ledLoop(now);
 
   for (auto& c : comps) {
     if (c.type == C_RELAY && c.countdownEnd && (int32_t)(now - c.countdownEnd) >= 0) {

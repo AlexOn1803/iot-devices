@@ -1,4 +1,4 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 
 package ua.madeisy.iot.ui
 
@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import com.hoho.android.usbserial.driver.UsbSerialDriver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ua.madeisy.iot.IotApp
@@ -72,7 +73,7 @@ import ua.madeisy.iot.flash.FlashException
 import ua.madeisy.iot.flash.UsbFlash
 import ua.madeisy.iot.flash.UsbLoaderPort
 
-private enum class Step { PICK, CONNECTING, MANUAL, READY, FLASHING, WIFI, PROVISION, DONE, ERROR }
+private enum class Step { PICK, CONNECTING, MANUAL, READY, FLASHING, WIFI, PROVISION, DONE, ERROR, MONITOR }
 
 /** Плати й образи IoT Devices для кожного чипа. */
 private fun boardsFor(chip: Chip): List<Pair<String, String>> = when (chip) {
@@ -106,6 +107,10 @@ fun FlashScreen(nav: Nav) {
     var ssid by remember { mutableStateOf("") }
     var pass by remember { mutableStateOf("") }
     var flashedIot by remember { mutableStateOf(false) }
+    var failedAt by remember { mutableStateOf(Step.PICK) }
+    var monitorJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val monitorLines = remember { mutableStateListOf<String>() }
+    var monitorBaud by remember { mutableStateOf(115200) }
 
     fun log(s: String) { scope.launch(Dispatchers.Main) { logLines += s; if (logLines.size > 60) logLines.removeAt(0) } }
 
@@ -113,9 +118,10 @@ fun FlashScreen(nav: Nav) {
 
     fun refresh() { drivers = UsbFlash.drivers(ctx) }
     LaunchedEffect(Unit) { while (step == Step.PICK) { refresh(); delay(1500) } }
-    DisposableEffect(Unit) { onDispose { port?.close() } }
+    DisposableEffect(Unit) { onDispose { monitorJob?.cancel(); port?.close() } }
 
     fun fail(e: Throwable) {
+        failedAt = step
         error = e.message ?: e.toString()
         log("Помилка: $error")
         step = Step.ERROR
@@ -123,6 +129,7 @@ fun FlashScreen(nav: Nav) {
 
     /** Підключення до завантажувача: спершу автоматично (DTR/RTS), потім — вручну. */
     fun connect(d: UsbSerialDriver, manual: Boolean) {
+        stopMonitor()
         driver = d
         error = null
         step = if (manual) Step.MANUAL else Step.CONNECTING
@@ -206,8 +213,55 @@ fun FlashScreen(nav: Nav) {
         }
     }
 
+    fun stopMonitor() { monitorJob?.cancel(); monitorJob = null }
+
+    /** Монітор порту: показує, що плата пише при старті (115200 — прошивка, 74880 — завантажувач ESP8266). */
+    fun startMonitor(d: UsbSerialDriver, baud: Int = monitorBaud) {
+        stopMonitor()
+        driver = d
+        monitorBaud = baud
+        step = Step.MONITOR
+        monitorJob = scope.launch(Dispatchers.IO) {
+            try {
+                if (!UsbFlash.requestPermission(ctx, d.device)) throw FlashException("Немає дозволу на USB-пристрій")
+                var p = port ?: UsbFlash.open(ctx, d, baud).also { port = it }
+                p.setBaud(baud)
+                p.setDtr(false); p.setRts(false)   // відпустити EN і GPIO0, якщо адаптер їх тримав
+                val sb = StringBuilder()
+                while (kotlinx.coroutines.currentCoroutineContext().isActive) {
+                    val b = try { p.read(200) } catch (e: FlashException) {
+                        // плата з вбудованим USB після скидання перепідключається
+                        if (!UsbFlash.isUsbJtag(d)) throw e
+                        p.close()
+                        withContext(Dispatchers.Main) { monitorLines += "— USB перепідключається… —" }
+                        p = UsbFlash.reopen(ctx, d.device.vendorId, baud) ?: throw e
+                        port = p
+                        continue
+                    }
+                    if (b.isEmpty()) continue
+                    sb.append(String(b, Charsets.UTF_8))
+                    val lines = mutableListOf<String>()
+                    while (true) {
+                        val nl = sb.indexOf("\n"); if (nl < 0) break
+                        lines += sb.substring(0, nl).trimEnd('\r'); sb.delete(0, nl + 1)
+                    }
+                    if (sb.length > 300) { lines += sb.toString(); sb.clear() }
+                    if (lines.isNotEmpty()) withContext(Dispatchers.Main) {
+                        monitorLines += lines
+                        while (monitorLines.size > 200) monitorLines.removeAt(0)
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { monitorLines += "— ${e.message} —" }
+            }
+        }
+    }
+
     fun provision() {
         val d = driver ?: return
+        stopMonitor()
         step = Step.PROVISION
         scope.launch {
             try {
@@ -278,7 +332,8 @@ fun FlashScreen(nav: Nav) {
                         ListItem(
                             leadingContent = { Icon(Icons.Filled.Usb, null) },
                             headlineContent = { Text(UsbFlash.describe(d)) },
-                            supportingContent = { Text("VID %04X · PID %04X".format(d.device.vendorId, d.device.productId)) },
+                            supportingContent = { Text("VID %04X · PID %04X · натисни, щоб прошити".format(d.device.vendorId, d.device.productId)) },
+                            trailingContent = { TextButton(onClick = { startMonitor(d) }) { Text("Монітор") } },
                             modifier = Modifier.clickable { connect(d, false) },
                         )
                     }
@@ -338,6 +393,13 @@ fun FlashScreen(nav: Nav) {
                 }
 
                 Step.WIFI -> SectionCard("Прошито! Тепер Wi-Fi") {
+                    if (!autoReset) {
+                        Text(
+                            "Спершу запусти прошивку: від'єднай GPIO0 від GND (відпусти BOOT) і перезавантаж плату — вимкни й увімкни живлення 3.3 В або замкни RST на GND. Потім натисни «Підключити до Wi-Fi».",
+                            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
                     Text(
                         "Введи домашню мережу (2.4 ГГц) — додаток передасть її платі тим самим кабелем, знайде плату в мережі й прив'яже до себе.",
                         style = MaterialTheme.typography.bodyMedium,
@@ -352,6 +414,7 @@ fun FlashScreen(nav: Nav) {
                     )
                     Spacer(Modifier.height(8.dp))
                     Button(enabled = ssid.isNotBlank(), onClick = { provision() }, modifier = Modifier.fillMaxWidth()) { Text("Підключити до Wi-Fi") }
+                    TextButton(onClick = { driver?.let { startMonitor(it) } }) { Text("Монітор порту — подивитись, чи плата стартує") }
                     TextButton(onClick = { port?.close(); port = null; nav.replace(Screen.AddEsp) }) {
                         Text("Пропустити — налаштую через точку доступу IoT-Setup")
                     }
@@ -364,14 +427,66 @@ fun FlashScreen(nav: Nav) {
                     OutlinedButton(onClick = { port?.close(); port = null; step = Step.PICK; logLines.clear() }) { Text("Прошити ще одну") }
                 }
 
+                Step.MONITOR -> SectionCard("Монітор порту · $monitorBaud") {
+                    Text(
+                        "Перезавантаж плату (RST або живлення) — тут має з'явитись «IoT Devices …» і «IOTDEV {…}». Для ESP8266 повідомлення завантажувача видно на 74880.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(115200, 74880).forEach { b ->
+                            androidx.compose.material3.FilterChip(selected = monitorBaud == b, onClick = { driver?.let { startMonitor(it, b) } }, label = { Text("$b") })
+                        }
+                        androidx.compose.material3.AssistChip(onClick = {
+                            scope.launch(Dispatchers.IO) { port?.let { it.setRts(true); delay(150); it.setRts(false) } }
+                        }, label = { Text("Скинути (RTS)") })
+                        androidx.compose.material3.AssistChip(onClick = {
+                            scope.launch(Dispatchers.IO) { runCatching { port?.write("\nINFO\n".toByteArray()) } }
+                        }, label = { Text("INFO") })
+                        androidx.compose.material3.AssistChip(onClick = { monitorLines.clear() }, label = { Text("Очистити") })
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    androidx.compose.material3.Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.fillMaxWidth().height(320.dp),
+                    ) {
+                        val st = rememberScrollState()
+                        LaunchedEffect(monitorLines.size) { st.scrollTo(st.maxValue) }
+                        Column(Modifier.verticalScroll(st).padding(8.dp)) {
+                            if (monitorLines.isEmpty()) Text("Поки тихо…", style = MaterialTheme.typography.bodySmall)
+                            monitorLines.forEach { Text(it, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)) }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { stopMonitor(); step = Step.WIFI }) { Text("Передати Wi-Fi") }
+                        OutlinedButton(onClick = { stopMonitor(); driver?.let { connect(it, false) } }) { Text("Прошити") }
+                    }
+                    TextButton(onClick = { stopMonitor(); port?.close(); port = null; step = Step.PICK }) { Text("Інший пристрій") }
+                }
+
                 Step.ERROR -> SectionCard("Не вдалося") {
                     Text(error ?: "", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
                     Spacer(Modifier.height(8.dp))
+                    if (failedAt == Step.PROVISION) {
+                        Text(
+                            "Відкрий монітор порту й перезавантаж плату. Якщо там порожньо або «сміття» — прошивка не стартує (GPIO0 досі на GND?). Якщо текст постійно повторюється з «rst cause» / «brownout» — бракує живлення 3.3 В: живи плату від окремого стабілізатора (AMS1117) зі спільним GND.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { driver?.let { connect(it, false) } ?: run { step = Step.PICK } }) {
+                        Button(onClick = {
+                            when {
+                                failedAt == Step.PROVISION -> step = Step.WIFI
+                                driver != null -> connect(driver!!, false)
+                                else -> step = Step.PICK
+                            }
+                        }) {
                             Icon(Icons.Filled.Refresh, null); Spacer(Modifier.width(4.dp)); Text("Ще раз")
                         }
-                        OutlinedButton(onClick = { driver?.let { connect(it, true) } }) { Text("Ручний режим") }
+                        if (failedAt != Step.PROVISION) OutlinedButton(onClick = { driver?.let { connect(it, true) } }) { Text("Ручний режим") }
+                        OutlinedButton(onClick = { driver?.let { startMonitor(it) } }) { Text("Монітор") }
                     }
                     TextButton(onClick = { port?.close(); port = null; step = Step.PICK }) { Text("Інший пристрій") }
                 }
