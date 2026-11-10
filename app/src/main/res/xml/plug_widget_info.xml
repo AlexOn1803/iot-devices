@@ -10,5 +10,5 @@
     android:previewLayout="@layout/widget_plug"
     android:description="@string/widget_desc"
     android:configure="ua.madeisy.iot.widget.WidgetConfigActivity"
-    android:widgetFeatures="reconfigurable|configuration_optional"
+    android:widgetFeatures="reconfigurable"
     android:widgetCategory="home_screen" />

@@ -1,120 +1,157 @@
 package ua.madeisy.iot.widget
 
+import android.app.AlarmManager
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.os.Bundle
+import android.os.SystemClock
+import android.util.TypedValue
+import android.view.View
 import android.widget.RemoteViews
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import ua.madeisy.iot.IotApp
 import ua.madeisy.iot.MainActivity
 import ua.madeisy.iot.R
 import ua.madeisy.iot.data.DeviceConfig
-import ua.madeisy.iot.ui.AppTheme
 
-/** Віджет на головний екран: назва, потужність, кнопка вкл/викл. */
-class PlugWidget : AppWidgetProvider() {
+/**
+ * Спільна логіка віджетів. Розміри — окремі провайдери (так кожен з'являється
+ * в списку віджетів лаунчера окремо): [SmallWidget] 1×1, [PlugWidget] 3×1, [LargeWidget] 3×2.
+ */
+abstract class BaseWidget : AppWidgetProvider() {
+    abstract val size: WidgetSize
 
     companion object {
         private const val ACTION_TOGGLE = "ua.madeisy.iot.WIDGET_TOGGLE"
         private const val ACTION_REFRESH = "ua.madeisy.iot.WIDGET_REFRESH"
         private const val ACTION_PERIODIC = "ua.madeisy.iot.WIDGET_PERIODIC"
+        private const val EXTRA_KEY = "deviceKey"
         private const val PERIOD_MS = 5 * 60 * 1000L
 
-        /**
-         * Тихе оновлення раз на ~5 хв, поки телефон не спить (ELAPSED_REALTIME без пробудження),
-         * щоб віджет був свіжим і без фонового моніторингу.
-         */
-        fun schedulePeriodic(ctx: Context) {
-            val am = ctx.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-            am.setInexactRepeating(
-                android.app.AlarmManager.ELAPSED_REALTIME,
-                android.os.SystemClock.elapsedRealtime() + PERIOD_MS, PERIOD_MS, periodicIntent(ctx)
-            )
+        val providers = listOf(SmallWidget::class.java, PlugWidget::class.java, LargeWidget::class.java)
+
+        fun sizeOf(ctx: Context, widgetId: Int): WidgetSize {
+            val cls = AppWidgetManager.getInstance(ctx).getAppWidgetInfo(widgetId)?.provider?.className
+            return when (cls) {
+                SmallWidget::class.java.name -> WidgetSize.SMALL
+                LargeWidget::class.java.name -> WidgetSize.LARGE
+                else -> WidgetSize.MEDIUM
+            }
         }
 
-        fun cancelPeriodic(ctx: Context) {
-            (ctx.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager).cancel(periodicIntent(ctx))
-        }
-
-        private fun periodicIntent(ctx: Context): PendingIntent = PendingIntent.getBroadcast(
-            ctx, 7001, Intent(ctx, PlugWidget::class.java).setAction(ACTION_PERIODIC),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        private fun widgetKeys(ctx: Context): List<String> {
+        /** Усі віджети всіх розмірів: (id, розмір). */
+        private fun allWidgets(ctx: Context): List<Pair<Int, WidgetSize>> {
             val mgr = AppWidgetManager.getInstance(ctx)
-            return mgr.getAppWidgetIds(ComponentName(ctx, PlugWidget::class.java)).toList()
-                .mapNotNull { deviceFor(ctx, it)?.key }.distinct()
-        }
-        private const val EXTRA_KEY = "deviceKey"
-        private const val PREFS = "widgets"
-
-        fun bind(ctx: Context, widgetId: Int, deviceKey: String) {
-            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("w$widgetId", deviceKey).apply()
+            return providers.flatMap { p ->
+                val size = when (p) { SmallWidget::class.java -> WidgetSize.SMALL; LargeWidget::class.java -> WidgetSize.LARGE; else -> WidgetSize.MEDIUM }
+                mgr.getAppWidgetIds(ComponentName(ctx, p)).map { it to size }
+            }
         }
 
-        private fun deviceFor(ctx: Context, widgetId: Int): DeviceConfig? {
+        private fun deviceFor(ctx: Context, widgetId: Int): Pair<DeviceConfig, WidgetCfg>? {
             val storage = IotApp.instance.storage
-            val key = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("w$widgetId", null)
-            return key?.let { storage.device(it) } ?: storage.devices.value.firstOrNull()
+            val w = WidgetData.load(ctx, widgetId)
+            val dev = w?.let { storage.device(it.deviceKey) } ?: return null
+            return dev to w
         }
 
         fun updateAll(ctx: Context) {
             val mgr = AppWidgetManager.getInstance(ctx)
-            val ids = mgr.getAppWidgetIds(ComponentName(ctx, PlugWidget::class.java))
-            ids.forEach { render(ctx, mgr, it) }
+            allWidgets(ctx).forEach { (id, size) -> runCatching { render(ctx, mgr, id, size) } }
         }
 
-        private fun render(ctx: Context, mgr: AppWidgetManager, id: Int, busy: Boolean = false) {
-            val views = RemoteViews(ctx.packageName, R.layout.widget_plug)
-            val dev = deviceFor(ctx, id)
-            if (dev == null) {
-                views.setTextViewText(R.id.w_name, "Немає пристроїв")
-                views.setTextViewText(R.id.w_power, "—")
-                views.setTextViewText(R.id.w_status, "Додай розетку в додатку")
-                views.setOnClickPendingIntent(R.id.w_root, openApp(ctx, null))
+        fun update(ctx: Context, widgetId: Int) {
+            render(ctx, AppWidgetManager.getInstance(ctx), widgetId, sizeOf(ctx, widgetId))
+        }
+
+        private fun layoutFor(size: WidgetSize) = when (size) {
+            WidgetSize.SMALL -> R.layout.widget_small
+            WidgetSize.MEDIUM -> R.layout.widget_plug
+            WidgetSize.LARGE -> R.layout.widget_large
+        }
+
+        private fun render(ctx: Context, mgr: AppWidgetManager, id: Int, size: WidgetSize, busy: Boolean = false) {
+            val views = RemoteViews(ctx.packageName, layoutFor(size))
+            val pair = deviceFor(ctx, id)
+            if (pair == null) {
+                views.setTextViewText(R.id.w_name, "Не налаштовано")
+                // у кожного розміру свій набір полів — чіпати можна лише наявні
+                if (size == WidgetSize.LARGE) views.setViewVisibility(R.id.w_row2, View.GONE)
+                else views.setTextViewText(R.id.w_value, "—")
+                if (size != WidgetSize.SMALL) views.setTextViewText(R.id.w_status, "Натисни, щоб вибрати пристрій")
+                views.setViewVisibility(R.id.w_toggle, View.GONE)
+                views.setOnClickPendingIntent(R.id.w_root, configure(ctx, id))
                 mgr.updateAppWidget(id, views)
                 return
             }
-            val sum = IotApp.instance.controller.summary(dev)
-            views.setTextViewText(R.id.w_name, dev.name)
-            views.setTextViewText(R.id.w_power, sum.main)
+            val (dev, w) = pair
+            val c = IotApp.instance.controller
+            val sum = c.summary(dev)
+            val metrics = WidgetData.selected(dev, w, size)
+            val hasToggle = WidgetData.hasToggle(dev, w)
+            val on = WidgetData.toggleOn(dev, w)
             val fresh = System.currentTimeMillis() - sum.updatedAt < 120_000
-            views.setTextViewText(
-                R.id.w_status,
-                when {
-                    busy -> "Зачекай…"
-                    sum.updatedAt == 0L -> "Натисни ⟳ для оновлення"
-                    !fresh -> "Оновлено ${android.text.format.DateFormat.format("HH:mm", sum.updatedAt)}"
-                    sum.sub != null -> sum.sub
-                    else -> "Онлайн"
+            val status = when {
+                busy -> "Зачекай…"
+                sum.updatedAt == 0L -> "Натисни ⟳"
+                !fresh -> "о ${android.text.format.DateFormat.format("HH:mm", sum.updatedAt)}"
+                !sum.online -> "офлайн"
+                else -> ""
+            }
+
+            views.setTextViewText(R.id.w_name, dev.name)
+            views.setViewVisibility(R.id.w_toggle, if (hasToggle) View.VISIBLE else View.GONE)
+            views.setImageViewResource(R.id.w_toggle, if (on == true) R.drawable.widget_btn_on else R.drawable.widget_btn_off)
+
+            when (size) {
+                WidgetSize.SMALL -> {
+                    val m = metrics.firstOrNull()
+                    val text = when {
+                        m != null -> m.value
+                        on != null -> if (on) "Увімк." else "Вимк."
+                        else -> "—"
+                    }
+                    views.setTextViewText(R.id.w_value, if (busy) "…" else text)
+                    // без кнопки значення — головне, робимо його більшим
+                    views.setTextViewTextSize(R.id.w_value, TypedValue.COMPLEX_UNIT_SP, if (hasToggle) 13f else 20f)
                 }
-            )
-            views.setImageViewResource(
-                R.id.w_toggle,
-                if (sum.on == true) R.drawable.widget_btn_on else R.drawable.widget_btn_off
-            )
+                WidgetSize.MEDIUM -> {
+                    val main = metrics.getOrNull(0)
+                    val sub = metrics.getOrNull(1)
+                    views.setTextViewText(R.id.w_value, main?.value ?: if (on != null) (if (on) "Увімк." else "Вимк.") else "—")
+                    views.setTextViewText(
+                        R.id.w_status,
+                        listOfNotNull(sub?.let { "${it.label}: ${it.value}" }, status.ifEmpty { null }).joinToString(" · ")
+                            .ifEmpty { main?.label ?: "" }
+                    )
+                }
+                WidgetSize.LARGE -> {
+                    views.setTextViewText(R.id.w_status, status)
+                    val tiles = listOf(
+                        Triple(R.id.w_t0, R.id.w_l0, R.id.w_v0), Triple(R.id.w_t1, R.id.w_l1, R.id.w_v1),
+                        Triple(R.id.w_t2, R.id.w_l2, R.id.w_v2), Triple(R.id.w_t3, R.id.w_l3, R.id.w_v3),
+                    )
+                    tiles.forEachIndexed { i, (tile, label, value) ->
+                        val m = metrics.getOrNull(i)
+                        // порожні клітинки ховаємо як INVISIBLE, щоб сітка не «їхала»
+                        views.setViewVisibility(tile, if (m != null) View.VISIBLE else if (i < 2 || metrics.size > 2) View.INVISIBLE else View.GONE)
+                        views.setTextViewText(label, m?.label ?: "")
+                        views.setTextViewText(value, m?.value ?: "")
+                    }
+                    views.setViewVisibility(R.id.w_row2, if (metrics.size > 2) View.VISIBLE else View.GONE)
+                }
+            }
+
             views.setOnClickPendingIntent(R.id.w_toggle, action(ctx, ACTION_TOGGLE, dev.key, id))
-            views.setOnClickPendingIntent(R.id.w_refresh, action(ctx, ACTION_REFRESH, dev.key, id))
+            if (size != WidgetSize.SMALL) views.setOnClickPendingIntent(R.id.w_refresh, action(ctx, ACTION_REFRESH, dev.key, id))
             views.setOnClickPendingIntent(R.id.w_root, openApp(ctx, dev.key))
             mgr.updateAppWidget(id, views)
         }
@@ -128,122 +165,126 @@ class PlugWidget : AppWidgetProvider() {
             )
         }
 
-        private fun openApp(ctx: Context, key: String?): PendingIntent {
+        private fun openApp(ctx: Context, key: String): PendingIntent {
             val i = Intent(ctx, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                key?.let { putExtra(MainActivity.EXTRA_DEVICE, it) }
+                putExtra(MainActivity.EXTRA_DEVICE, key)
             }
-            return PendingIntent.getActivity(
-                ctx, (key ?: "none").hashCode(), i,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
+            return PendingIntent.getActivity(ctx, key.hashCode(), i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         }
-    }
 
-    override fun onEnabled(context: Context) { schedulePeriodic(context) }
-
-    override fun onDisabled(context: Context) { cancelPeriodic(context) }
-
-    override fun onUpdate(context: Context, mgr: AppWidgetManager, ids: IntArray) {
-        schedulePeriodic(context)
-        ids.forEach { render(context, mgr, it) }
-        // тихо оновити дані, якщо застаріли
-        val keys = ids.toList().mapNotNull { deviceFor(context, it)?.key }.distinct()
-        if (keys.isEmpty()) return
-        val pending = goAsync()
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            try {
-                keys.forEach { k ->
-                    val dev = IotApp.instance.storage.device(k)
-                    val age = System.currentTimeMillis() - (dev?.let { IotApp.instance.controller.summary(it).updatedAt } ?: 0)
-                    if (age > 60_000) IotApp.instance.controller.refreshOnce(k)
-                }
-                withContext(Dispatchers.Main) { updateAll(context) }
-            } finally { pending.finish() }
+        private fun configure(ctx: Context, widgetId: Int): PendingIntent {
+            val i = Intent(ctx, WidgetConfigActivity::class.java)
+                .setAction(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE + widgetId)  // унікальний для кожного віджета
+                .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            return PendingIntent.getActivity(ctx, widgetId, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         }
-    }
 
-    override fun onReceive(context: Context, intent: Intent) {
-        super.onReceive(context, intent)
-        val action = intent.action ?: return
-        if (action == ACTION_PERIODIC) {
-            val keys = widgetKeys(context)
-            if (keys.isEmpty()) { cancelPeriodic(context); return }
-            val pending = goAsync()
+        // ---- періодичне оновлення (раз на ~5 хв, без пробудження телефона) ----
+
+        fun schedulePeriodic(ctx: Context) {
+            val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            am.setInexactRepeating(AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + PERIOD_MS, PERIOD_MS, periodicIntent(ctx))
+        }
+
+        private fun cancelPeriodicIfUnused(ctx: Context) {
+            if (allWidgets(ctx).isEmpty()) (ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(periodicIntent(ctx))
+        }
+
+        private fun periodicIntent(ctx: Context): PendingIntent = PendingIntent.getBroadcast(
+            ctx, 7001, Intent(ctx, PlugWidget::class.java).setAction(ACTION_PERIODIC),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        private fun usedKeys(ctx: Context): List<String> =
+            allWidgets(ctx).mapNotNull { (id, _) -> deviceFor(ctx, id)?.first?.key }.distinct()
+
+        /** Оновити дані пристроїв, якщо застаріли, і перемалювати віджети. */
+        private fun refreshStale(ctx: Context, keys: List<String>, then: () -> Unit) {
             CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                 try {
                     val c = IotApp.instance.controller
                     keys.forEach { k ->
-                        val dev = IotApp.instance.storage.device(k)
-                        val age = System.currentTimeMillis() - (dev?.let { c.summary(it).updatedAt } ?: 0)
-                        if (age > 60_000) runCatching { c.refreshOnce(k) }
+                        val dev = IotApp.instance.storage.device(k) ?: return@forEach
+                        if (System.currentTimeMillis() - c.summary(dev).updatedAt > 60_000) runCatching { c.refreshOnce(k) }
                     }
                 } finally {
-                    withContext(Dispatchers.Main) { updateAll(context) }
-                    pending.finish()
+                    withContext(Dispatchers.Main) { updateAll(ctx) }
+                    then()
                 }
-            }
-            return
-        }
-        if (action != ACTION_TOGGLE && action != ACTION_REFRESH) return
-        val key = intent.getStringExtra(EXTRA_KEY) ?: return
-        val widgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1)
-        val mgr = AppWidgetManager.getInstance(context)
-        if (widgetId != -1) render(context, mgr, widgetId, busy = true)
-        val pending = goAsync()
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            try {
-                val c = IotApp.instance.controller
-                if (action == ACTION_TOGGLE) c.toggle(key) else c.refreshOnce(key)
-            } finally {
-                withContext(Dispatchers.Main) { updateAll(context) }
-                pending.finish()
             }
         }
     }
 
-    override fun onDeleted(context: Context, appWidgetIds: IntArray) {
-        val e = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-        appWidgetIds.forEach { e.remove("w$it") }
-        e.apply()
+    override fun onEnabled(context: Context) = schedulePeriodic(context)
+
+    override fun onDisabled(context: Context) = cancelPeriodicIfUnused(context)
+
+    override fun onUpdate(context: Context, mgr: AppWidgetManager, ids: IntArray) {
+        schedulePeriodic(context)
+        ids.forEach { render(context, mgr, it, size) }
+        val keys = ids.mapNotNull { deviceFor(context, it)?.first?.key }.distinct()
+        if (keys.isEmpty()) return
+        val pending = goAsync()
+        refreshStale(context, keys) { pending.finish() }
+    }
+
+    override fun onDeleted(context: Context, appWidgetIds: IntArray) = WidgetData.remove(context, appWidgetIds)
+
+    override fun onReceive(context: Context, intent: Intent) {
+        super.onReceive(context, intent)
+        when (val action = intent.action) {
+            ACTION_PERIODIC -> {
+                val keys = usedKeys(context)
+                if (keys.isEmpty()) { cancelPeriodicIfUnused(context); return }
+                val pending = goAsync()
+                refreshStale(context, keys) { pending.finish() }
+            }
+            ACTION_TOGGLE, ACTION_REFRESH -> {
+                val key = intent.getStringExtra(EXTRA_KEY) ?: return
+                val widgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1)
+                val mgr = AppWidgetManager.getInstance(context)
+                if (widgetId != -1) render(context, mgr, widgetId, sizeOf(context, widgetId), busy = true)
+                val pending = goAsync()
+                CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                    try {
+                        val c = IotApp.instance.controller
+                        val dev = IotApp.instance.storage.device(key)
+                        val w = if (widgetId != -1) WidgetData.load(context, widgetId) else null
+                        if (action == ACTION_REFRESH || dev == null) {
+                            c.refreshOnce(key)
+                        } else if (!dev.isEsp || w == null || w.toggle == WidgetCfg.AUTO) {
+                            c.toggle(key)
+                        } else if (w.toggle >= 0) {
+                            if (c.espState(key).comps.isEmpty()) c.refreshOnce(key)
+                            c.espSet(key, JSONObject().put("i", w.toggle).put("toggle", true))
+                        }
+                    } finally {
+                        withContext(Dispatchers.Main) { updateAll(context) }
+                        pending.finish()
+                    }
+                }
+            }
+        }
     }
 }
 
-/** Вибір розетки для нового віджета. */
-class WidgetConfigActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        val widgetId = intent?.extras?.getInt(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
-            ?: AppWidgetManager.INVALID_APPWIDGET_ID
-        setResult(RESULT_CANCELED, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId))
-        if (widgetId == AppWidgetManager.INVALID_APPWIDGET_ID) { finish(); return }
-        val devices = IotApp.instance.storage.devices.value
-        if (devices.size <= 1) {
-            devices.firstOrNull()?.let { PlugWidget.bind(this, widgetId, it.key) }
-            done(widgetId); return
-        }
-        setContent {
-            AppTheme {
-                Column(Modifier.fillMaxSize().padding(top = 48.dp)) {
-                    Text("Яку розетку показувати?", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(16.dp))
-                    devices.forEach { d ->
-                        ListItem(
-                            headlineContent = { Text(d.name) },
-                            supportingContent = { Text(d.deviceId) },
-                            modifier = Modifier.clickable {
-                                PlugWidget.bind(this@WidgetConfigActivity, widgetId, d.key)
-                                done(widgetId)
-                            }
-                        )
-                    }
-                }
-            }
-        }
-    }
+/** 3×1 — назва, головне значення, друге значення, кнопка. Стара назва класу — щоб наявні віджети не зникли. */
+class PlugWidget : BaseWidget() {
+    override val size = WidgetSize.MEDIUM
 
-    private fun done(widgetId: Int) {
-        PlugWidget.updateAll(this)
-        setResult(RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId))
-        finish()
+    companion object {
+        fun updateAll(ctx: Context) = BaseWidget.updateAll(ctx)
     }
+}
+
+/** 1×1 — кнопка і одне значення. */
+class SmallWidget : BaseWidget() {
+    override val size = WidgetSize.SMALL
+}
+
+/** 3×2 — до чотирьох значень і кнопка. */
+class LargeWidget : BaseWidget() {
+    override val size = WidgetSize.LARGE
 }
