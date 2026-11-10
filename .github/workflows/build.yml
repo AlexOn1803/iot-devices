@@ -115,6 +115,13 @@ jobs:
           name: fw-${{ matrix.board }}
           path: fw-${{ matrix.board }}/*.bin
 
+      # для розшифрування аварійних журналів (addr2line); у реліз не потрапляє
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elf-${{ matrix.board }}
+          path: firmware/esp/.pio/build/${{ matrix.board }}/firmware.elf
+          retention-days: 30
+
   release:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: [app, firmware]
@@ -125,6 +132,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: out
+          pattern: "{apk,fw-*}"
           merge-multiple: true
 
       - name: Publish "latest" release

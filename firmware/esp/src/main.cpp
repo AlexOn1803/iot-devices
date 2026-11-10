@@ -706,7 +706,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int len) {
 }
 
 void mqttApplySettings() {
-  mqtt.disconnect();
+  if (mqtt.connected()) mqtt.disconnect();   // без клієнта disconnect() звертається до NULL
   mqttHost = prefs.getString("mq_host", "");
   mqttPort = prefs.getUInt("mq_port", 8883);
   mqttUser = prefs.getString("mq_user", "");

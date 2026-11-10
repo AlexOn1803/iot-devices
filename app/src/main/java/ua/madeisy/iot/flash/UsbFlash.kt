@@ -36,6 +36,8 @@ class UsbLoaderPort(val port: UsbSerialPort) : LoaderPort {
     fun close() { runCatching { port.close() } }
 }
 
+private val PANIC_MARKERS = listOf("Guru Meditation", "Backtrace", "abort()", "Exception (", "rst cause", "Stack memory", "Core  0 register dump")
+
 object UsbFlash {
     private const val ACTION_PERMISSION = "ua.madeisy.iot.USB_PERMISSION"
     const val ESPRESSIF_VID = 0x303A
@@ -148,6 +150,9 @@ object UsbFlash {
                         line.startsWith("IOTDEV-OK") -> return@withContext id
                         line.startsWith("IOTDEV-ERR") -> { log(line); return@withContext null }
                         // решту виводу плати показуємо в журналі — так видно, чи вона взагалі стартує
+                        PANIC_MARKERS.any { line.contains(it) } -> {
+                            log("⚠ Плата падає й перезавантажується: " + line.take(80))
+                        }
                         line.isNotBlank() && shown < 12 -> { shown++; log("плата: " + line.take(80)) }
                     }
                 }
