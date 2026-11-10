@@ -19,6 +19,20 @@
 
 #include "web.h"
 
+#if !defined(ESP8266)
+#include <WiFiUdp.h>
+#include "tuya.h"
+#define HAS_TUYA 1
+// компоненти читає ще й фонова задача Tuya — перебудова списку і її доступ ідуть під цим замком
+SemaphoreHandle_t compsLock = nullptr;
+#define COMPS_LOCK() do { if (compsLock) xSemaphoreTake(compsLock, portMAX_DELAY); } while (0)
+#define COMPS_UNLOCK() do { if (compsLock) xSemaphoreGive(compsLock); } while (0)
+#else
+#define HAS_TUYA 0
+#define COMPS_LOCK() do {} while (0)
+#define COMPS_UNLOCK() do {} while (0)
+#endif
+
 #ifndef FW_VERSION
 #define FW_VERSION "dev"
 #endif
@@ -67,7 +81,7 @@ String mqttHost;
 
 // ---------------- компоненти ----------------
 
-enum CompType { C_RELAY, C_BUTTON, C_PWM, C_WS2812, C_DHT, C_DS18B20, C_AHT, C_ANALOG, C_INPUT, C_THERMO, C_BME, C_SHT21, C_UNKNOWN };
+enum CompType { C_RELAY, C_BUTTON, C_PWM, C_WS2812, C_DHT, C_DS18B20, C_AHT, C_ANALOG, C_INPUT, C_THERMO, C_BME, C_SHT21, C_TUYA, C_UNKNOWN };
 
 struct Comp {
   CompType type = C_UNKNOWN;
@@ -109,7 +123,15 @@ struct Comp {
   bool enabled = true;
   uint32_t lastSwitch = 0;
   uint32_t sensorBadSince = 0;
-  String thermoState = "idle"; // idle | on | off | nosensor
+  String thermoState = "idle"; // idle | on | off | nosensor | offline
+  // розетка Tuya в тій самій мережі: плата керує нею напряму локальним протоколом
+  String tId, tKey;
+  char tIp[16] = "";
+  int tVer = 33, tDp = 1;
+  volatile int8_t tWant = -1;   // що треба надіслати: -1 нічого, 0/1
+  bool tOnline = false, tKnown = false;
+  char tErr[64] = "";
+  uint32_t tLastQuery = 0, tNextTry = 0;
 };
 
 std::vector<Comp> comps;
@@ -128,6 +150,7 @@ CompType parseType(const String& t) {
   if (t == "thermo") return C_THERMO;
   if (t == "bme") return C_BME;
   if (t == "sht21") return C_SHT21;
+  if (t == "tuya") return C_TUYA;
   return C_UNKNOWN;
 }
 
@@ -175,6 +198,8 @@ void applyStrip(Comp& c, uint32_t now = 0) {
   c.strip->show();
 }
 
+uint32_t compsGen = 0;   // змінюється при кожній перебудові — фонова задача так бачить застарілі результати
+
 void freeComps() {
   for (auto& c : comps) {
     if (c.strip) { c.strip->clear(); c.strip->show(); delete c.strip; }
@@ -183,10 +208,18 @@ void freeComps() {
   }
   comps.clear();
   nextLedc = 0;
+  compsGen++;
 }
 
 /** Створює компоненти з JSON-конфігу (поле "comps"). */
+void buildCompsLocked(JsonArrayConst arr);
 void buildComps(JsonArrayConst arr) {
+  COMPS_LOCK();
+  buildCompsLocked(arr);
+  COMPS_UNLOCK();
+}
+
+void buildCompsLocked(JsonArrayConst arr) {
   freeComps();
   uint32_t relayMask = prefs.getUInt("rs", 0);
   bool wireStarted = false;
@@ -287,6 +320,16 @@ void buildComps(JsonArrayConst arr) {
         c.onAt = o["onAt"] | 18.0f;
         c.offAt = o["offAt"] | 19.0f;
         c.enabled = o["enabled"] | true;
+        break;
+      case C_TUYA:
+        c.tId = (const char*)(o["id"] | "");
+        c.tKey = (const char*)(o["key"] | "");
+        strlcpy(c.tIp, o["ip"] | "", sizeof(c.tIp));
+        c.tVer = (int)(atof(o["ver"] | "3.3") * 10 + 0.5);
+        c.tDp = o["dp"] | 1;
+#if !HAS_TUYA
+        strlcpy(c.tErr, "ESP8266 cannot control Tuya plugs", sizeof(c.tErr));
+#endif
         break;
       default:
         break;
@@ -411,7 +454,21 @@ void readSensors(uint32_t now) {
   }
 }
 
+/** Розетці Tuya — лише замовлення; надішле фонова задача, стан оновиться після відповіді. */
+void setTuya(Comp& c, bool on) {
+  int8_t w = on ? 1 : 0;
+  if (c.tWant == w) return;          // вже чекає надсилання — не збиваємо паузу між повторами
+  c.tWant = w;
+  c.tNextTry = 0;
+}
+
+void toggleTuya(Comp& c) {
+  int8_t w = c.tWant;
+  setTuya(c, w >= 0 ? !w : !c.on);
+}
+
 void setRelay(Comp& c, bool on) {
+  if (c.type == C_TUYA) { setTuya(c, on); return; }
   c.on = on;
   c.countdownEnd = 0;
   applyRelay(c);
@@ -429,7 +486,7 @@ void handleThermostats(uint32_t now) {
     if (t.sensor < 0 || t.sensor >= (int)comps.size() || t.target < 0 || t.target >= (int)comps.size()) continue;
     Comp& sensor = comps[t.sensor];
     Comp& relay = comps[t.target];
-    if (relay.type != C_RELAY) continue;
+    if (relay.type != C_RELAY && relay.type != C_TUYA) continue;
     t.temp = sensor.temp;
     if (!t.enabled) { t.thermoState = "idle"; t.sensorBadSince = 0; continue; }
     if (isnan(sensor.temp)) {
@@ -447,6 +504,7 @@ void handleThermostats(uint32_t now) {
       setRelay(relay, want == 1);
     }
     t.thermoState = relay.on ? "on" : "off";
+    if (relay.type == C_TUYA && !relay.tOnline && relay.tLastQuery) t.thermoState = "offline";
   }
 }
 
@@ -476,6 +534,7 @@ void handleButtons(uint32_t now) {
       if (pressed && c.target >= 0 && c.target < (int)comps.size()) {
         Comp& t = comps[c.target];
         if (t.type == C_RELAY) setRelay(t, !t.on);
+        else if (t.type == C_TUYA) toggleTuya(t);
         else if (t.type == C_PWM) { t.on = !t.on; applyPwm(t); }
         else if (t.type == C_WS2812) { t.on = !t.on; applyStrip(t, now); }
       }
@@ -544,6 +603,13 @@ String stateJson(bool diag = true) {
         o["enabled"] = c.enabled; o["mode"] = c.heat ? "heat" : "cool";
         putNum(o, "onAt", c.onAt); putNum(o, "offAt", c.offAt); putNum(o, "temp", c.temp);
         o["sensor"] = c.sensor; o["target"] = c.target; o["state"] = c.thermoState;
+        break;
+      case C_TUYA:
+        if (c.tKnown) o["on"] = c.on; else o["on"] = nullptr;
+        o["online"] = c.tOnline;
+        o["ip"] = c.tIp;
+        if (c.tWant >= 0) o["pending"] = c.tWant == 1;
+        if (c.tErr[0]) o["err"] = c.tErr;
         break;
       default:
         break;
@@ -640,6 +706,9 @@ void applyCommands(JsonVariant doc) {
       }
       if (o["fx"].is<const char*>()) c.fx = (const char*)o["fx"];
       if (c.type == C_PWM) applyPwm(c); else applyStrip(c, now);
+    } else if (c.type == C_TUYA) {
+      if (hasOn) setTuya(c, o["on"]);
+      if (toggle) toggleTuya(c);
     } else if (c.type == C_THERMO) {
       if (o["enabled"].is<bool>()) c.enabled = o["enabled"];
       if (o["onAt"].is<float>()) c.onAt = o["onAt"];
@@ -1012,6 +1081,116 @@ void applyFlashedSettings() {
   blobErase();
 }
 
+// ---------------- розетки Tuya (фонова задача) ----------------
+// Кожна дія — коротке TCP-з'єднання з розеткою (порт 6668): розетка тримає лише одне з'єднання,
+// тож довго його не займаємо, щоб і додаток міг підключитись. Стан опитується раз на хвилину.
+// Якщо розетка змінила IP, плата знаходить її за ID у широкомовних UDP-пакетах (6666/6667).
+#if HAS_TUYA
+struct ClientTransport : tuya::Transport {
+  WiFiClient& c;
+  explicit ClientTransport(WiFiClient& cl) : c(cl) {}
+  bool write(const uint8_t* d, size_t n) override { return c.write(d, n) == n; }
+  int read(uint8_t* d, size_t n, uint32_t ms) override {
+    uint32_t start = millis();
+    while (!c.available()) {
+      if (!c.connected()) return -1;
+      if (millis() - start >= ms) return 0;
+      vTaskDelay(pdMS_TO_TICKS(5));
+    }
+    int a = c.available();
+    return c.read(d, (size_t)a < n ? a : n);
+  }
+};
+
+static void tuyaUdp(WiFiUDP& u) {
+  int n = u.parsePacket();
+  if (n <= 0) return;
+  static uint8_t buf[1024];
+  n = u.read(buf, sizeof(buf));
+  std::string js;
+  if (n <= 0 || !tuya::decodeUdp(buf, n, &js)) return;
+  JsonDocument d;
+  if (deserializeJson(d, js.c_str())) return;
+  const char* id = d["gwId"] | "";
+  const char* ip = d["ip"] | "";
+  if (!*id || !*ip) return;
+  COMPS_LOCK();
+  for (auto& c : comps)
+    if (c.type == C_TUYA && c.tId == id && strcmp(c.tIp, ip) != 0) {
+      strlcpy(c.tIp, ip, sizeof(c.tIp));
+      c.tNextTry = 0;
+    }
+  COMPS_UNLOCK();
+}
+
+static void tuyaTask(void*) {
+  WiFiUDP u6666, u6667;
+  bool udp = false;
+  for (;;) {
+    vTaskDelay(pdMS_TO_TICKS(40));
+    if (WiFi.status() != WL_CONNECTED) continue;
+    if (!udp) { u6666.begin(6666); u6667.begin(6667); udp = true; }
+    tuyaUdp(u6666);
+    tuyaUdp(u6667);
+
+    // вибираємо одну роботу: спершу команди, потім планові опитування
+    int idx = -1, want = -1;
+    uint32_t gen = 0;
+    String ip, id, key;
+    int ver = 33, dp = 1;
+    uint32_t now = millis();
+    COMPS_LOCK();
+    for (int pass = 0; pass < 2 && idx < 0; pass++) {
+      for (size_t i = 0; i < comps.size(); i++) {
+        Comp& c = comps[i];
+        if (c.type != C_TUYA || c.tId.isEmpty() || c.tKey.isEmpty()) continue;
+        if (c.tNextTry && (int32_t)(now - c.tNextTry) < 0) continue;
+        bool due = pass == 0 ? c.tWant >= 0
+                             : (!c.tLastQuery || now - c.tLastQuery > (c.tOnline ? 60000UL : 15000UL));
+        if (!due) continue;
+        idx = i; want = pass == 0 ? c.tWant : -1;
+        ip = c.tIp; id = c.tId; key = c.tKey; ver = c.tVer; dp = c.tDp;
+        c.tLastQuery = now ? now : 1;
+        break;
+      }
+    }
+    gen = compsGen;
+    COMPS_UNLOCK();
+    if (idx < 0) continue;
+
+    int r = -1;
+    std::string err;
+    if (ip.isEmpty()) {
+      err = "IP unknown, searching the network";
+    } else {
+      WiFiClient cl;
+      if (!cl.connect(ip.c_str(), 6668, 2500)) err = "no connection (busy or offline)";
+      else {
+        cl.setNoDelay(true);
+        ClientTransport tr(cl);
+        tuya::Ver v = ver == 34 ? tuya::V34 : ver == 35 ? tuya::V35 : tuya::V33;
+        r = tuya::exchange(tr, v, key.c_str(), id.c_str(), dp, want, (uint32_t)time(nullptr), &err);
+      }
+      cl.stop();
+    }
+
+    COMPS_LOCK();
+    if (gen == compsGen && idx < (int)comps.size()) {
+      Comp& c = comps[idx];
+      if (r >= 0) {
+        c.on = r == 1; c.tKnown = true; c.tOnline = true; c.tErr[0] = 0; c.tNextTry = 0;
+        if (c.tWant == want) c.tWant = -1;
+      } else {
+        c.tOnline = false;
+        strlcpy(c.tErr, err.c_str(), sizeof(c.tErr));
+        c.tNextTry = millis() + 5000;   // повтор команди через 5 с
+      }
+    }
+    COMPS_UNLOCK();
+  }
+}
+#endif
+
 // ---------------- setup / loop ----------------
 
 void setup() {
@@ -1033,6 +1212,9 @@ void setup() {
   snprintf(buf, sizeof(buf), "esp-%02x%02x%02x", mac[3], mac[4], mac[5]);
   deviceId = buf;
 
+#if HAS_TUYA
+  compsLock = xSemaphoreCreateMutex();
+#endif
   prefs.begin();
   applyFlashedSettings();
   deviceName = prefs.getString("name", String("IoT ") + CHIP_NAME);
@@ -1048,6 +1230,9 @@ void setup() {
   else startSta();
   setupServer();
   mqttApplySettings();
+#if HAS_TUYA
+  xTaskCreate(tuyaTask, "tuya", 8192, nullptr, 1, nullptr);
+#endif
   Serial.printf("IoT Devices %s, id %s\n", fwVersion(), deviceId.c_str());
   Serial.print("IOTDEV "); Serial.println(infoJson());
 }
@@ -1143,6 +1328,7 @@ void loop() {
     if (WiFi.status() == WL_CONNECTED) {
       lastStaOk = now;
       startMdns();
+      if (!timeStarted) { configTime(0, 0, "pool.ntp.org", "time.google.com"); timeStarted = true; }
       if (apMode && now - staStartedAt > 5000) stopAp();
     } else if (!apMode && now - max(staStartedAt, lastStaOk) > STA_TIMEOUT) {
       startAp();

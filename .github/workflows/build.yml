@@ -52,6 +52,38 @@ jobs:
           name: test-report
           path: app/build/reports/tests/
 
+  tuya-protocol:
+    # протокол Tuya з прошивки ESP, зібраний на комп'ютері: вектори tinytuya + імітація розетки по TCP
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test
+        run: |
+          set -e
+          sudo apt-get install -y -q libssl-dev >/dev/null
+          pip install -q tinytuya
+          W=$RUNNER_TEMP/tuya; mkdir -p $W
+          (cd $W && python3 $GITHUB_WORKSPACE/tools/gen_vectors.py >/dev/null)
+          SRC="firmware/esp/src/tuya.cpp firmware/esp/src/tuya_crypto.cpp"
+          g++ -std=c++17 -DIOT_HOST_TEST -I firmware/esp/src tools/tuya_test/test.cpp $SRC -lcrypto -o $W/vec
+          g++ -std=c++17 -DIOT_HOST_TEST -I firmware/esp/src tools/tuya_test/client.cpp $SRC -lcrypto -o $W/client
+          $W/vec $W/vectors.json
+          port=17000
+          for v in 3.3 3.4 3.5; do
+            port=$((port+1))
+            python3 tools/tuya_test/fake_plug.py $port $v 0123456789abcdef > $W/fake$v.log 2>&1 & P=$!
+            sleep 1
+            echo "== $v"
+            $W/client $port $v 0123456789abcdef query
+            $W/client $port $v 0123456789abcdef on
+            $W/client $port $v 0123456789abcdef off
+            if $W/client $port $v wrongkey12345678 on; then echo "wrong key accepted"; exit 1; fi
+            kill $P || true
+          done
+
   firmware:
     runs-on: ubuntu-latest
     strategy:
@@ -127,7 +159,7 @@ jobs:
 
   release:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: [app, firmware]
+    needs: [app, firmware, tuya-protocol]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
