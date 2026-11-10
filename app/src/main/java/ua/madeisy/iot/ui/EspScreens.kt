@@ -250,7 +250,7 @@ private fun EspCompCard(c: EspComp, s: EspState, send: (JSONObject) -> Unit) {
                 }
             }
         }
-        EspType.DHT, EspType.AHT, EspType.DS18B20, EspType.BME -> SectionCard {
+        EspType.DHT, EspType.AHT, EspType.DS18B20, EspType.BME, EspType.SHT21 -> SectionCard {
             Text(c.name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(c.temp?.let { String.format(Locale.US, "%.1f °C", it) } ?: "—", style = MaterialTheme.typography.displaySmall)
@@ -611,6 +611,7 @@ fun ComponentsEditor(comps: androidx.compose.runtime.snapshots.SnapshotStateList
         AssistChip(onClick = { comps.add(EspCompConfig(EspType.DHT, "Температура", pin = dhtPin)) }, label = { Text("DHT22") })
         AssistChip(onClick = { comps.add(EspCompConfig(EspType.WS2812, "Стрічка", pin = stripPin, count = 30)) }, label = { Text("Стрічка WS2812") })
         AssistChip(onClick = { comps.add(EspCompConfig(EspType.PWM, "LED на платі", pin = if (board == "esp32c3") 8 else 2, inv = board == "esp32c3" || board.startsWith("esp8266"))) }, label = { Text("LED на платі") })
+        AssistChip(onClick = { comps.add(EspCompConfig(EspType.SHT21, "Клімат", sda = if (board.startsWith("esp8266")) 4 else 6, scl = if (board.startsWith("esp8266")) 5 else 7)) }, label = { Text("SHT21 (GY-21)") })
         AssistChip(onClick = { comps.add(EspCompConfig(EspType.BME, "Клімат", sda = if (board.startsWith("esp8266")) 4 else 6, scl = if (board.startsWith("esp8266")) 5 else 7)) }, label = { Text("BME280") })
         if (board == "esp01") AssistChip(onClick = {
             comps.add(EspCompConfig(EspType.RELAY, "Реле", pin = 0, inv = true))
@@ -623,7 +624,7 @@ fun ComponentsEditor(comps: androidx.compose.runtime.snapshots.SnapshotStateList
             supportingContent = {
                 Text(
                     c.type.label + " · " + when (c.type) {
-                        EspType.AHT, EspType.BME -> "SDA ${c.sda}, SCL ${c.scl}"
+                        EspType.AHT, EspType.BME, EspType.SHT21 -> "SDA ${c.sda}, SCL ${c.scl}"
                         EspType.THERMO -> "датчик №${c.sensor} → реле №${c.target}"
                         else -> EspCompConfig.pinLabel(c.pin, board)
                     } +
@@ -723,7 +724,7 @@ private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompC
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(c.name, { c = c.copy(name = it) }, label = { Text("Назва") }, singleLine = true)
-                if (c.type == EspType.AHT || c.type == EspType.BME) {
+                if (c.type in EspType.i2c) {
                     PinPicker("SDA", c.sda, board) { c = c.copy(sda = it) }
                     PinPicker("SCL", c.scl, board) { c = c.copy(scl = it) }
                     Text("Усі I2C-датчики на платі ділять одну шину — вкажи однакові SDA/SCL.", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

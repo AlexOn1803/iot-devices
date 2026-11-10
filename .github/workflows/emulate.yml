@@ -45,7 +45,8 @@ jobs:
           img[0:len(fw)] = fw
           cfg = {"key": "testkey12345678", "name": "QEMU", "ssid": "TestNet", "pass": "secret",
                  "comps": [{"t": "relay", "name": "Реле", "pin": 5, "inv": False, "po": "off"},
-                           {"t": "dht", "name": "Темп", "pin": 4, "model": 22}],
+                           {"t": "dht", "name": "Темп", "pin": 4, "model": 22},
+                           {"t": "sht21", "name": "Клімат", "sda": 6, "scl": 7}],
                  "led": {"en": True}}
           blob = b"IOTCFG1\n" + json.dumps(cfg, ensure_ascii=False).encode() + b"\0"
           img[0x290000:0x290000 + len(blob)] = blob

@@ -16,12 +16,14 @@ enum class EspType(val code: String, val label: String, val hint: String) {
     INPUT("input", "Цифровий вхід", "Датчик руху, геркон дверей"),
     THERMO("thermo", "Термостат", "Датчик цієї плати керує її реле — працює без телефона"),
     BME("bme", "BME280/BMP280", "Температура, вологість, тиск (I2C)"),
+    SHT21("sht21", "SHT21/HTU21/Si7021", "Температура й вологість (I2C, GY-21)"),
     UNKNOWN("?", "Невідомо", "");
 
     companion object {
         fun parse(s: String?) = entries.firstOrNull { it.code == s } ?: UNKNOWN
-        val addable = listOf(RELAY, BUTTON, PWM, WS2812, DHT, DS18B20, AHT, BME, ANALOG, INPUT, THERMO)
-        val tempSensors = setOf(DHT, DS18B20, AHT, BME)
+        val addable = listOf(RELAY, BUTTON, PWM, WS2812, DHT, DS18B20, AHT, BME, SHT21, ANALOG, INPUT, THERMO)
+        val tempSensors = setOf(DHT, DS18B20, AHT, BME, SHT21)
+        val i2c = setOf(AHT, BME, SHT21)
     }
 }
 
@@ -58,7 +60,7 @@ data class EspCompConfig(
             EspType.WS2812 -> o.put("pin", pin).put("count", count)
             EspType.DHT -> o.put("pin", pin).put("model", model)
             EspType.DS18B20 -> o.put("pin", pin)
-            EspType.AHT, EspType.BME -> o.put("sda", sda).put("scl", scl)
+            EspType.AHT, EspType.BME, EspType.SHT21 -> o.put("sda", sda).put("scl", scl)
             EspType.ANALOG -> o.put("pin", pin).put("inv", inv).put("min", min).put("max", max)
             EspType.INPUT -> o.put("pin", pin).put("inv", inv).put("pull", pull)
             EspType.THERMO -> o.put("sensor", sensor).put("target", target).put("mode", if (heat) "heat" else "cool")
@@ -70,7 +72,7 @@ data class EspCompConfig(
 
     /** Піни, які займає компонент. */
     val pins: List<Int> get() = when (type) {
-        EspType.AHT, EspType.BME -> listOf(sda, scl)
+        EspType.AHT, EspType.BME, EspType.SHT21 -> listOf(sda, scl)
         EspType.THERMO -> emptyList()
         else -> listOf(pin)
     }

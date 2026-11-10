@@ -91,7 +91,7 @@ object WidgetData {
         return when (c.type) {
             EspType.RELAY, EspType.PWM, EspType.WS2812 ->
                 listOf(Metric("$p:on", c.name, when (c.on) { true -> "Увімк."; false -> "Вимк."; null -> "—" }))
-            EspType.DHT, EspType.AHT, EspType.BME, EspType.DS18B20 -> buildList {
+            EspType.DHT, EspType.AHT, EspType.BME, EspType.DS18B20, EspType.SHT21 -> buildList {
                 add(Metric("$p:temp", c.name, c.temp?.let { "${f1(it)} °C" } ?: "—"))
                 if (c.type != EspType.DS18B20 && (c.hum != null || c.type != EspType.BME))
                     add(Metric("$p:hum", "${c.name}: вологість", c.hum?.let { "${it.toInt()} %" } ?: "—"))

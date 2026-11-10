@@ -67,7 +67,7 @@ String mqttHost;
 
 // ---------------- компоненти ----------------
 
-enum CompType { C_RELAY, C_BUTTON, C_PWM, C_WS2812, C_DHT, C_DS18B20, C_AHT, C_ANALOG, C_INPUT, C_THERMO, C_BME, C_UNKNOWN };
+enum CompType { C_RELAY, C_BUTTON, C_PWM, C_WS2812, C_DHT, C_DS18B20, C_AHT, C_ANALOG, C_INPUT, C_THERMO, C_BME, C_SHT21, C_UNKNOWN };
 
 struct Comp {
   CompType type = C_UNKNOWN;
@@ -127,6 +127,7 @@ CompType parseType(const String& t) {
   if (t == "input") return C_INPUT;
   if (t == "thermo") return C_THERMO;
   if (t == "bme") return C_BME;
+  if (t == "sht21") return C_SHT21;
   return C_UNKNOWN;
 }
 
@@ -178,7 +179,7 @@ void freeComps() {
   for (auto& c : comps) {
     if (c.strip) { c.strip->clear(); c.strip->show(); delete c.strip; }
     delete c.dht; delete c.ds; delete c.ow; delete c.aht; delete c.bme; delete c.bmp;
-    if (c.ledcCh >= 0 && validPin(c.pin)) pwmDetach(c.pin);
+    if (c.type == C_PWM && c.ledcCh >= 0 && validPin(c.pin)) pwmDetach(c.pin);
   }
   comps.clear();
   nextLedc = 0;
@@ -201,7 +202,7 @@ void buildComps(JsonArrayConst arr) {
     c.name = o["name"] | c.typeName;
     c.pin = o["pin"] | -1;
     c.pin2 = o["scl"] | -1;
-    if (c.type == C_AHT || c.type == C_BME) { c.pin = o["sda"] | -1; }
+    if (c.type == C_AHT || c.type == C_BME || c.type == C_SHT21) { c.pin = o["sda"] | -1; }
     c.inv = o["inv"] | false;
     size_t idx = comps.size();
     switch (c.type) {
@@ -247,6 +248,14 @@ void buildComps(JsonArrayConst arr) {
         if (startWire(c.pin, c.pin2)) {
           c.aht = new Adafruit_AHTX0();
           if (!c.aht->begin(&Wire)) { delete c.aht; c.aht = nullptr; }
+        }
+        break;
+      case C_SHT21:
+        // SHT21 / HTU21D / Si7021 — однакові команди, адреса 0x40; без бібліотеки, щоб не роздувати прошивку
+        if (startWire(c.pin, c.pin2)) {
+          Wire.beginTransmission(0x40);
+          c.active = Wire.endTransmission() == 0;
+          c.ledcCh = 0;  // фаза вимірювання: 0 — чекаємо, 1 — міряємо температуру, 2 — вологість
         }
         break;
       case C_BME:
@@ -296,6 +305,53 @@ void loadConfig() {
   buildComps(doc["comps"].as<JsonArrayConst>());
 }
 
+/** CRC-8 (поліном 0x31), яким SHT21/HTU21 захищає кожне вимірювання. */
+static uint8_t shtCrc(const uint8_t* d, int n) {
+  uint8_t crc = 0;
+  for (int i = 0; i < n; i++) {
+    crc ^= d[i];
+    for (int b = 0; b < 8; b++) crc = (crc & 0x80) ? (crc << 1) ^ 0x31 : crc << 1;
+  }
+  return crc;
+}
+
+/** Читає 16-бітне значення після команди; -1 — помилка. */
+static int shtRead() {
+  uint8_t d[3];
+  if (Wire.requestFrom((uint8_t)0x40, (uint8_t)3) != 3) return -1;
+  for (int i = 0; i < 3; i++) d[i] = Wire.read();
+  if (shtCrc(d, 2) != d[2]) return -1;
+  return ((d[0] << 8) | d[1]) & 0xFFFC;
+}
+
+static void shtCommand(uint8_t cmd) {
+  Wire.beginTransmission(0x40); Wire.write(cmd); Wire.endTransmission();
+}
+
+/**
+ * Вимірювання без блокування циклу: команда «температура» (0xF3), через 90 мс читання,
+ * команда «вологість» (0xF5), через 40 мс читання. Повтор раз на 2 с.
+ */
+void shtStep(Comp& c, uint32_t now) {
+  int& phase = c.ledcCh;
+  if (phase == 0) {
+    if (now - c.lastRead < 2000) return;
+    c.lastRead = now;
+    shtCommand(0xF3);
+    c.lastChange = now; phase = 1;
+  } else if (phase == 1 && now - c.lastChange >= 90) {
+    int raw = shtRead();
+    if (raw < 0) { c.temp = NAN; c.hum = NAN; phase = 0; return; }
+    c.temp = -46.85f + 175.72f * raw / 65536.0f;
+    shtCommand(0xF5);
+    c.lastChange = now; phase = 2;
+  } else if (phase == 2 && now - c.lastChange >= 40) {
+    int raw = shtRead();
+    c.hum = raw < 0 ? NAN : constrain(-6.0f + 125.0f * raw / 65536.0f, 0.0f, 100.0f);
+    phase = 0;
+  }
+}
+
 void readSensors(uint32_t now) {
   for (auto& c : comps) {
     switch (c.type) {
@@ -321,6 +377,9 @@ void readSensors(uint32_t now) {
           if (c.aht->getEvent(&h, &t)) { c.temp = t.temperature; c.hum = h.relative_humidity; }
           else { c.temp = NAN; c.hum = NAN; }
         }
+        break;
+      case C_SHT21:
+        shtStep(c, now);
         break;
       case C_BME:
         if (now - c.lastRead > 2000) {
@@ -455,7 +514,7 @@ String stateJson(bool diag = true) {
         rgb.add(c.r); rgb.add(c.g); rgb.add(c.b);
         break;
       }
-      case C_DHT: case C_AHT:
+      case C_DHT: case C_AHT: case C_SHT21:
         putNum(o, "temp", c.temp); putNum(o, "hum", c.hum, 0);
         break;
       case C_DS18B20:
@@ -996,7 +1055,7 @@ void setup() {
 uint32_t bootPressedAt = 0;
 
 bool pinUsed(int p) {
-  for (auto& c : comps) if (c.pin == p || (c.type == C_AHT || c.type == C_BME ? c.pin2 == p : false)) return true;
+  for (auto& c : comps) if (c.pin == p || (c.type == C_AHT || c.type == C_BME || c.type == C_SHT21 ? c.pin2 == p : false)) return true;
   return false;
 }
 
