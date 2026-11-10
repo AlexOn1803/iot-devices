@@ -3,6 +3,9 @@
 // тож перепрошивати плату під кожен пристрій не треба.
 
 #include "platform.h"
+#if !defined(ESP8266)
+#include <esp_system.h>
+#endif
 #include <DNSServer.h>
 #include <Wire.h>
 #include <Adafruit_NeoPixel.h>
@@ -961,7 +964,12 @@ void setup() {
   pinMode(BOOT_PIN, INPUT_PULLUP);
 
   uint8_t mac[6];
+#if defined(ESP8266)
   WiFi.macAddress(mac);
+#else
+  // до старту Wi-Fi WiFi.macAddress() повертає нулі — читаємо MAC з eFuse
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
+#endif
   char buf[16];
   snprintf(buf, sizeof(buf), "esp-%02x%02x%02x", mac[3], mac[4], mac[5]);
   deviceId = buf;
@@ -975,10 +983,12 @@ void setup() {
   loadConfig();
   ledLoad();
 
-  setupServer();
-  mqttApplySettings();
+  // спершу Wi-Fi (він ініціалізує мережевий стек), і лише потім сервер:
+  // інакше на ESP32 server.begin() падає з «tcpip_send_msg_wait_sem: Invalid mbox»
   if (wifiSsid.isEmpty()) startAp();
   else startSta();
+  setupServer();
+  mqttApplySettings();
   Serial.printf("IoT Devices %s, id %s\n", fwVersion(), deviceId.c_str());
   Serial.print("IOTDEV "); Serial.println(infoJson());
 }

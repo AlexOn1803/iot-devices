@@ -63,6 +63,13 @@ jobs:
           echo "=========== qemu ==========="
           tail -20 qemu.out || true
 
+      - name: Fail on crash
+        run: |
+          if grep -E "assert failed|Guru Meditation|abort\(\)|Rebooting" serial.log; then
+            echo "::error::Прошивка падає в емуляторі"; exit 1
+          fi
+          echo "Без падінь за 25 с"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
