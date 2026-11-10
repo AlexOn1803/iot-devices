@@ -123,6 +123,59 @@ private fun ConfigScreen(size: WidgetSize, existing: WidgetCfg?, onSave: (Widget
     }
 }
 
+/** Діалог «Віджет на головний екран» з екрана пристрою. */
+@Composable
+fun PinWidgetDialog(device: DeviceConfig, onDismiss: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var size by remember { mutableStateOf(WidgetSize.MEDIUM) }
+    var toggle by remember { mutableStateOf(WidgetCfg.AUTO) }
+    val metrics = remember { mutableStateListOf<String>() }
+    val canPin = remember { BaseWidget.canPin(ctx) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Віджет на головний екран") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (!canPin) {
+                    Text(
+                        "Твій лаунчер не дозволяє додавати віджети з додатку. Утримуй порожнє місце на головному екрані → Віджети → IoT Devices.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    return@Column
+                }
+                Text("Розмір", style = MaterialTheme.typography.titleMedium)
+                WidgetSize.entries.forEach { s ->
+                    Row(Modifier.fillMaxWidth().clickable {
+                        size = s
+                        while (metrics.size > s.maxMetrics) metrics.removeAt(metrics.lastIndex)
+                    }, verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = size == s, onClick = null, modifier = Modifier.padding(10.dp))
+                        Column {
+                            Text(s.label)
+                            Text(
+                                when (s) {
+                                    WidgetSize.SMALL -> "Кнопка й одне значення"
+                                    WidgetSize.MEDIUM -> "Кнопка, головне й друге значення"
+                                    WidgetSize.LARGE -> "Кнопка й до чотирьох значень"
+                                },
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                DeviceOptions(device, size, toggle, { toggle = it }, metrics)
+            }
+        },
+        confirmButton = {
+            if (canPin) androidx.compose.material3.TextButton(onClick = {
+                BaseWidget.requestPin(ctx, size, WidgetCfg(device.key, toggle, metrics.toList()))
+                onDismiss()
+            }) { Text("Додати") }
+        },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text(if (canPin) "Скасувати" else "Зрозуміло") } },
+    )
+}
+
 @Composable
 private fun DeviceOptions(
     device: DeviceConfig,

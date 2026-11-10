@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
@@ -113,6 +114,8 @@ fun EspDeviceScreen(key: String, nav: Nav) {
     val s = states[key] ?: EspState()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    var pinDialog by remember { mutableStateOf(false) }
+    if (pinDialog) ua.madeisy.iot.widget.PinWidgetDialog(cfg) { pinDialog = false }
 
     fun send(vararg cmd: JSONObject) {
         scope.launch {
@@ -125,7 +128,10 @@ fun EspDeviceScreen(key: String, nav: Nav) {
             TopAppBar(
                 title = { Text(cfg.name) },
                 navigationIcon = { IconButton(onClick = { nav.pop() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") } },
-                actions = { IconButton(onClick = { nav.push(Screen.Edit(key)) }) { Icon(Icons.Filled.Settings, "Налаштування") } },
+                actions = {
+                    IconButton(onClick = { pinDialog = true }) { Icon(Icons.Filled.Widgets, "Додати віджет") }
+                    IconButton(onClick = { nav.push(Screen.Edit(key)) }) { Icon(Icons.Filled.Settings, "Налаштування") }
+                },
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },

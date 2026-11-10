@@ -33,6 +33,8 @@ abstract class BaseWidget : AppWidgetProvider() {
         private const val ACTION_TOGGLE = "ua.madeisy.iot.WIDGET_TOGGLE"
         private const val ACTION_REFRESH = "ua.madeisy.iot.WIDGET_REFRESH"
         private const val ACTION_PERIODIC = "ua.madeisy.iot.WIDGET_PERIODIC"
+        private const val ACTION_PINNED = "ua.madeisy.iot.WIDGET_PINNED"
+        private const val EXTRA_CFG = "cfg"
         private const val EXTRA_KEY = "deviceKey"
         private const val PERIOD_MS = 5 * 60 * 1000L
 
@@ -181,6 +183,30 @@ abstract class BaseWidget : AppWidgetProvider() {
             return PendingIntent.getActivity(ctx, widgetId, i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         }
 
+        fun providerFor(size: WidgetSize): Class<out BaseWidget> = when (size) {
+            WidgetSize.SMALL -> SmallWidget::class.java
+            WidgetSize.MEDIUM -> PlugWidget::class.java
+            WidgetSize.LARGE -> LargeWidget::class.java
+        }
+
+        fun canPin(ctx: Context): Boolean = AppWidgetManager.getInstance(ctx).isRequestPinAppWidgetSupported
+
+        /**
+         * Попросити лаунчер додати віджет на головний екран прямо з додатку.
+         * Налаштування передаються в колбек і зберігаються, щойно лаунчер видасть id віджета.
+         */
+        fun requestPin(ctx: Context, size: WidgetSize, cfg: WidgetCfg): Boolean {
+            val mgr = AppWidgetManager.getInstance(ctx)
+            if (!mgr.isRequestPinAppWidgetSupported) return false
+            val cb = Intent(ctx, PlugWidget::class.java).setAction(ACTION_PINNED).putExtra(EXTRA_CFG, cfg.toJson())
+            // MUTABLE — лаунчер дописує в цей intent id нового віджета
+            val pi = PendingIntent.getBroadcast(
+                ctx, (cfg.toJson() + size).hashCode(), cb,
+                PendingIntent.FLAG_UPDATE_CURRENT or (if (android.os.Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+            )
+            return mgr.requestPinAppWidget(ComponentName(ctx, providerFor(size)), null, pi)
+        }
+
         // ---- періодичне оновлення (раз на ~5 хв, без пробудження телефона) ----
 
         fun schedulePeriodic(ctx: Context) {
@@ -224,7 +250,7 @@ abstract class BaseWidget : AppWidgetProvider() {
     override fun onUpdate(context: Context, mgr: AppWidgetManager, ids: IntArray) {
         schedulePeriodic(context)
         ids.forEach { render(context, mgr, it, size) }
-        val keys = ids.mapNotNull { deviceFor(context, it)?.first?.key }.distinct()
+        val keys = ids.toList().mapNotNull { deviceFor(context, it)?.first?.key }.distinct()
         if (keys.isEmpty()) return
         val pending = goAsync()
         refreshStale(context, keys) { pending.finish() }
@@ -235,6 +261,14 @@ abstract class BaseWidget : AppWidgetProvider() {
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
         when (val action = intent.action) {
+            ACTION_PINNED -> {
+                val id = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
+                val cfg = WidgetCfg.parse(intent.getStringExtra(EXTRA_CFG)) ?: return
+                if (id == AppWidgetManager.INVALID_APPWIDGET_ID) return
+                WidgetData.save(context, id, cfg)
+                schedulePeriodic(context)
+                update(context, id)
+            }
             ACTION_PERIODIC -> {
                 val keys = usedKeys(context)
                 if (keys.isEmpty()) { cancelPeriodicIfUnused(context); return }
