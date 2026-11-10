@@ -117,6 +117,22 @@ data class EspCompConfig(
             else -> listOf(0, 1, 2, 3, 4)
         }
 
+        /** Світлодіод стану за замовчуванням (так само, як у прошивці). */
+        fun defaultLed(board: String): JSONObject = when (board) {
+            "esp32c3" -> JSONObject().put("pin", 8).put("inv", true)
+            "esp32" -> JSONObject().put("pin", 2).put("inv", false)
+            "esp32s2" -> JSONObject().put("pin", 15).put("inv", false)
+            "esp32s3" -> JSONObject().put("pin", 48).put("inv", false).put("rgb", true)
+            else -> JSONObject().put("pin", 2).put("inv", true)
+        }.put("en", true)
+
+        /** Куди додаток пише блок налаштувань (має збігатися з прошивкою — перевіряє CI). */
+        fun settingsAddress(board: String): Int = when (board) {
+            "esp8266" -> 0x3FB000
+            "esp01" -> 0xFB000
+            else -> 0x290000
+        }
+
         fun adcMax(board: String) = if (board == "esp8266" || board == "esp01") 1023 else 4095
 
         private val D1_LABELS = mapOf(16 to "D0", 5 to "D1", 4 to "D2", 0 to "D3", 2 to "D4", 14 to "D5", 12 to "D6", 13 to "D7", 15 to "D8", 3 to "RX", 1 to "TX", 17 to "A0")

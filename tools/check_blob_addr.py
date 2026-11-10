@@ -1,7 +1,7 @@
 """CI: перевіряє, що адреса блоку налаштувань у прошивці збігається з тією, куди пише додаток."""
 import glob, os, re, struct, sys
 
-APP = {"esp8266": 0x3FA000, "esp01": 0xFB000}   # ESP32-сімейство: 0x290000
+APP = {"esp8266": 0x3FB000, "esp01": 0xFB000}   # ESP32-сімейство: 0x290000
 board, build = sys.argv[1], sys.argv[2]
 
 if board in APP:

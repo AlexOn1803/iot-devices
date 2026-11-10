@@ -41,6 +41,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -73,7 +74,7 @@ import ua.madeisy.iot.flash.FlashException
 import ua.madeisy.iot.flash.UsbFlash
 import ua.madeisy.iot.flash.UsbLoaderPort
 
-private enum class Step { PICK, CONNECTING, MANUAL, READY, FLASHING, WIFI, PROVISION, DONE, ERROR, MONITOR }
+private enum class Step { PICK, CONNECTING, MANUAL, READY, FLASHING, WIFI, PROVISION, SEARCH, DONE, ERROR, MONITOR }
 
 /** Плати й образи IoT Devices для кожного чипа. */
 private fun boardsFor(chip: Chip): List<Pair<String, String>> = when (chip) {
@@ -111,6 +112,18 @@ fun FlashScreen(nav: Nav) {
     var monitorJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val monitorLines = remember { mutableStateListOf<String>() }
     var monitorBaud by remember { mutableStateOf(115200) }
+    // налаштування, які записуються разом із прошивкою
+    var setupName by remember { mutableStateOf("") }
+    var showPass by remember { mutableStateOf(false) }
+    val setupComps = remember { mutableStateListOf<ua.madeisy.iot.esp.EspCompConfig>() }
+    var setupLed by remember { mutableStateOf<org.json.JSONObject?>(null) }
+    var setupFor by remember { mutableStateOf("") }
+    var pendingKey by remember { mutableStateOf<String?>(null) }
+    var mqttIncluded by remember { mutableStateOf("") }
+    if (board.isNotEmpty() && setupFor != board) {
+        setupFor = board
+        setupLed = ua.madeisy.iot.esp.EspCompConfig.defaultLed(board)
+    }
 
     fun log(s: String) { scope.launch(Dispatchers.Main) { logLines += s; if (logLines.size > 60) logLines.removeAt(0) } }
 
@@ -171,6 +184,42 @@ fun FlashScreen(nav: Nav) {
         }
     }
 
+    /** Після прошивки з Wi-Fi: шукаємо плату в мережі за ключем, який записали в налаштування. */
+    fun findFlashed() {
+        val key = pendingKey ?: return
+        step = Step.SEARCH
+        error = null
+        scope.launch {
+            try {
+                port?.close(); port = null   // звільняємо USB — плата живе своїм життям
+                stage = "Плата підключається до Wi-Fi"
+                val deadline = System.currentTimeMillis() + 90_000
+                var found: Pair<String, ua.madeisy.iot.esp.EspInfo>? = null
+                val known = app.storage.devices.value.filter { it.isEsp }.associateBy { it.deviceId }
+                while (found == null && System.currentTimeMillis() < deadline) {
+                    progress = 1f - (deadline - System.currentTimeMillis()) / 90_000f
+                    val list = runCatching { EspDiscovery.scan(ctx, 4000) }.getOrDefault(emptyList())
+                    for (f in list) {
+                        // «наша» плата — та, що приймає щойно згенерований ключ
+                        if (known[f.id]?.apiKey == key) { found = f.host to EspClient(f.host, key).info(); break }
+                        val ok = runCatching { EspClient(f.host, key).state() }.isSuccess
+                        if (ok) { found = f.host to EspClient(f.host, key).info(); break }
+                    }
+                }
+                val (host, info) = found ?: throw FlashException(
+                    "Плата не з'явилась у мережі за 1,5 хв. Подивись на світлодіод: мигає — не може підключитися (пароль? мережа 2.4 ГГц?), світить постійно — роздає IoT-Setup, тоді підключись до неї й введи Wi-Fi там."
+                )
+                log("Знайдено ${info.id} на $host")
+                val old = app.storage.devices.value.firstOrNull { it.isEsp && it.deviceId == info.id }
+                val cfg = (old ?: DeviceConfig(name = info.name.ifBlank { chip?.label ?: "ESP" }, kind = DeviceKind.ESP))
+                    .copy(deviceId = info.id, ip = host, apiKey = key, kind = DeviceKind.ESP, mqttApplied = mqttIncluded,
+                        name = setupName.trim().ifEmpty { old?.name ?: info.name.ifBlank { "ESP" } })
+                app.storage.upsertDevice(cfg)
+                nav.replace(Screen.Device(cfg.key))
+            } catch (e: Exception) { fail(e) }
+        }
+    }
+
     fun flash() {
         val l = loader ?: return
         val c = chip ?: return
@@ -205,10 +254,29 @@ fun FlashScreen(nav: Nav) {
                     stage = "Запис"; progress = 0f
                     l.flash(image, offset) { progress = it }
                     log("Записано успішно")
+                    if (flashedIot) {
+                        // блок налаштувань в окремий сектор: плата застосує його на першому старті
+                        val key = EspClient.newKey()
+                        val j = org.json.JSONObject().put("key", key)
+                        if (setupName.isNotBlank()) j.put("name", setupName.trim())
+                        if (ssid.isNotBlank()) j.put("ssid", ssid.trim()).put("pass", pass)
+                        if (setupComps.isNotEmpty()) j.put("comps", org.json.JSONArray(setupComps.map { it.toJson() }))
+                        setupLed?.let { j.put("led", it) }
+                        val mq = app.storage.mqtt.value
+                        if (mq.configured) j.put("mqtt", org.json.JSONObject().put("host", mq.host).put("port", mq.port).put("user", mq.user).put("pass", mq.pass))
+                        val text = ("IOTCFG1\n" + j.toString()).toByteArray(Charsets.UTF_8) + byteArrayOf(0)
+                        if (text.size > 4000) throw FlashException("Забагато налаштувань — прибери кілька компонентів")
+                        val blob = text + ByteArray(4096 - text.size) { 0xFF.toByte() }
+                        stage = "Запис налаштувань"; progress = 0f
+                        l.flash(blob, ua.madeisy.iot.esp.EspCompConfig.settingsAddress(board)) { progress = it }
+                        pendingKey = key
+                        mqttIncluded = if (mq.configured) mq.signature else ""
+                        log("Налаштування записано")
+                    }
                     if (autoReset) l.hardReset() else l.runApp()
                 }
                 if (!flashedIot) { step = Step.DONE; return@launch }
-                step = Step.WIFI
+                if (ssid.isNotBlank()) findFlashed() else step = Step.WIFI
             } catch (e: Exception) { fail(e) }
         }
     }
@@ -288,12 +356,13 @@ fun FlashScreen(nav: Nav) {
                     found = runCatching { EspDiscovery.scan(ctx, 3000) }.getOrNull()?.firstOrNull { it.id == id }
                 }
                 val f = found ?: throw FlashException("Плата $id не з'явилась у мережі. Перевір пароль Wi-Fi (і що мережа 2.4 ГГц).")
-                val info = EspClient(f.host, "").info()
-                val key = EspClient.newKey()
-                if (!info.claimed) EspClient(f.host, "").claim(key, info.name)
+                val info = EspClient(f.host, pendingKey ?: "").info()
                 val old = app.storage.devices.value.firstOrNull { it.isEsp && it.deviceId == id }
+                // ключ уже записано разом із прошивкою; якщо ні — прив'язуємо зараз
+                val key = pendingKey ?: EspClient.newKey().also { k -> if (!info.claimed) EspClient(f.host, "").claim(k, info.name) }
                 val cfg = (old ?: DeviceConfig(name = info.name.ifBlank { chip?.label ?: "ESP" }, kind = DeviceKind.ESP))
-                    .copy(deviceId = id, ip = f.host, apiKey = if (info.claimed) (old?.apiKey ?: "") else key, kind = DeviceKind.ESP)
+                    .copy(deviceId = id, ip = f.host, apiKey = if (pendingKey == null && info.claimed) (old?.apiKey ?: "") else key,
+                        kind = DeviceKind.ESP, mqttApplied = mqttIncluded)
                 app.storage.upsertDevice(cfg)
                 port?.close(); port = null
                 nav.replace(Screen.Device(cfg.key))
@@ -382,8 +451,50 @@ fun FlashScreen(nav: Nav) {
                             )
                         }
                         Spacer(Modifier.height(8.dp))
-                        Button(onClick = { flash() }, modifier = Modifier.fillMaxWidth()) { Text("Прошити") }
+                        if (customUri != null) Button(onClick = { flash() }, modifier = Modifier.fillMaxWidth()) { Text("Прошити") }
                     }
+                    if (customUri == null) {
+                        SectionCard("Налаштування плати") {
+                            Text(
+                                "Усе це запишеться разом із прошивкою: плата одразу підключиться до Wi-Fi і з'явиться в додатку вже налаштованою. Можна лишити порожнім і налаштувати потім.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(setupName, { setupName = it }, label = { Text("Назва плати") }, singleLine = true,
+                                placeholder = { Text("Напр. Теплиця") }, modifier = Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(ssid, { ssid = it }, label = { Text("Wi-Fi: назва мережі (2.4 ГГц)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                pass, { pass = it }, label = { Text("Wi-Fi: пароль") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                                visualTransformation = if (showPass) androidx.compose.ui.text.input.VisualTransformation.None else PasswordVisualTransformation(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                trailingIcon = { TextButton(onClick = { showPass = !showPass }) { Text(if (showPass) "Сховати" else "Показати") } },
+                            )
+                            if (app.storage.mqtt.collectAsState().value.configured) Text(
+                                "Налаштування MQTT (доступ через інтернет) теж запишуться.",
+                                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            ua.madeisy.iot.ui.ComponentsEditor(setupComps, board)
+                            Spacer(Modifier.height(12.dp))
+                            setupLed?.let { led -> ua.madeisy.iot.ui.LedEditor(led, board, setupComps) { setupLed = it } }
+                        }
+                        Button(onClick = { flash() }, modifier = Modifier.fillMaxWidth()) {
+                            Text(if (ssid.isNotBlank()) "Прошити й підключити" else "Прошити")
+                        }
+                    }
+                }
+
+                Step.SEARCH -> {
+                    Busy("$stage…")
+                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                    Text(
+                        "Кабель можна від'єднати. Світлодіод має мигати, доки плата підключається, і згаснути, коли вона в мережі.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    TextButton(onClick = { step = Step.WIFI }) { Text("Не чекати — передати Wi-Fi кабелем") }
                 }
 
                 Step.FLASHING, Step.PROVISION -> {
@@ -479,6 +590,7 @@ fun FlashScreen(nav: Nav) {
                         Button(onClick = {
                             when {
                                 failedAt == Step.PROVISION -> step = Step.WIFI
+                                failedAt == Step.SEARCH -> findFlashed()
                                 driver != null -> connect(driver!!, false)
                                 else -> step = Step.PICK
                             }
