@@ -129,7 +129,7 @@ fun FlashScreen(nav: Nav) {
 
     /** Підключення до завантажувача: спершу автоматично (DTR/RTS), потім — вручну. */
     fun connect(d: UsbSerialDriver, manual: Boolean) {
-        stopMonitor()
+        monitorJob?.cancel(); monitorJob = null
         driver = d
         error = null
         step = if (manual) Step.MANUAL else Step.CONNECTING

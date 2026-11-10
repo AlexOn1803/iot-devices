@@ -475,12 +475,15 @@ fun EspConfigScreen(key: String, nav: Nav) {
     var showKey by remember { mutableStateOf(false) }
     val client = remember(original) { EspClient(original.ip, original.apiKey) }
     var board by remember { mutableStateOf("esp32c3") }
+    // світлодіод стану Wi-Fi (null — прошивка стара, без підтримки)
+    var led by remember { mutableStateOf<JSONObject?>(null) }
 
     LaunchedEffect(key) {
         runCatching { client.info().board.takeIf { it.isNotBlank() && it != "unknown" }?.let { board = it } }
         try {
             val j = client.getConfig()
             comps.clear(); comps.addAll(EspCompConfig.listFromJson(j))
+            led = j.optJSONObject("led")
             j.optString("name").takeIf { it.isNotBlank() }?.let { if (name == original.name) name = it }
             loaded = true
         } catch (e: Exception) {
@@ -492,7 +495,7 @@ fun EspConfigScreen(key: String, nav: Nav) {
         busy = true
         scope.launch {
             try {
-                if (loaded) client.postConfig(EspCompConfig.listToJson(name.trim(), comps.toList()))
+                if (loaded) client.postConfig(EspCompConfig.listToJson(name.trim(), comps.toList()).apply { led?.let { put("led", it) } })
                 app.storage.updateDevice(key) { it.copy(name = name.trim().ifEmpty { "ESP32" }) }
                 app.controller.restart(key)
                 busy = false
@@ -620,6 +623,26 @@ fun EspConfigScreen(key: String, nav: Nav) {
             }
 
             HorizontalDivider()
+            led?.let { l ->
+                Text("Світлодіод стану", style = MaterialTheme.typography.titleMedium)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "Мигає — підключається до Wi-Fi, світить — роздає мережу IoT-Setup, не світить — усе гаразд.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Switch(checked = l.optBoolean("en", true), onCheckedChange = { led = JSONObject(l.toString()).put("en", it) })
+                }
+                if (l.optBoolean("en", true)) {
+                    PinPicker("Пін світлодіода", l.optInt("pin", -1), board) { p -> led = JSONObject(l.toString()).put("pin", p) }
+                    CheckRow("Світиться низьким рівнем (на більшості плат з синім LED)", l.optBoolean("inv")) { v -> led = JSONObject(l.toString()).put("inv", v) }
+                    if (l.optInt("pin", -1) in comps.flatMap { it.pins }) Text(
+                        "Цей пін зайнятий компонентом — світлодіод стану не працюватиме.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                HorizontalDivider()
+            }
             Text("Плата", style = MaterialTheme.typography.titleMedium)
             var mqttInfo by remember { mutableStateOf<String?>(null) }
             LaunchedEffect(key) { runCatching { mqttInfo = client.info().mqtt } }
