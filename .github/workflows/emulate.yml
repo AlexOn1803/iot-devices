@@ -11,6 +11,8 @@ jobs:
   qemu:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    # у QEMU для класичної ESP32 немає Wi-Fi — вона падає на регістрах радіо, це обмеження емулятора
+    continue-on-error: ${{ matrix.board == 'esp32' }}
     strategy:
       fail-fast: false
       matrix:
