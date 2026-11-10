@@ -1,0 +1,72 @@
+name: Emulate firmware
+
+# Запускає зібрану прошивку в емуляторі Espressif QEMU і показує, що плата пише при старті.
+on:
+  workflow_run:
+    workflows: [Build]
+    types: [completed]
+  workflow_dispatch:
+
+jobs:
+  qemu:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [esp32c3, esp32]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get firmware from the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download latest -p "iot-${{ matrix.board }}-full.bin" -D fw
+
+      - name: Get Espressif QEMU
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq libsdl2-2.0-0 libslirp0 libgcrypt20 > /dev/null
+          arch=$([ ${{ matrix.board }} = esp32 ] && echo xtensa || echo riscv32)
+          tag=$(gh release list -R espressif/qemu --limit 1 --json tagName -q '.[0].tagName')
+          gh release download "$tag" -R espressif/qemu -p "qemu-$arch-softmmu-*x86_64-linux-gnu.tar.xz" -D q
+          tar -xf q/*.tar.xz -C q
+          echo "QEMU=$(find q -name qemu-system-$arch -type f | head -1)" >> $GITHUB_ENV
+
+      - name: Build 4 MB flash image (firmware + test settings)
+        run: |
+          python3 - <<'PY'
+          import json
+          img = bytearray(b"\xff" * 4 * 1024 * 1024)
+          fw = open("fw/iot-${{ matrix.board }}-full.bin", "rb").read()
+          img[0:len(fw)] = fw
+          cfg = {"key": "testkey12345678", "name": "QEMU", "ssid": "TestNet", "pass": "secret",
+                 "comps": [{"t": "relay", "name": "Реле", "pin": 5, "inv": False, "po": "off"},
+                           {"t": "dht", "name": "Темп", "pin": 4, "model": 22}],
+                 "led": {"en": True}}
+          blob = b"IOTCFG1\n" + json.dumps(cfg, ensure_ascii=False).encode() + b"\0"
+          img[0x290000:0x290000 + len(blob)] = blob
+          open("flash.bin", "wb").write(img)
+          PY
+
+      - name: Run 25 s in QEMU
+        run: |
+          if [ ${{ matrix.board }} = esp32 ]; then
+            M="-machine esp32 -m 4M"
+          else
+            M="-machine esp32c3"
+          fi
+          timeout 25 $QEMU -nographic $M -drive file=flash.bin,if=mtd,format=raw -serial file:serial.log -monitor none > qemu.out 2>&1 || true
+          echo "=========== serial ==========="
+          cat serial.log || true
+          echo "=========== qemu ==========="
+          tail -20 qemu.out || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qemu-${{ matrix.board }}
+          path: |
+            serial.log
+            qemu.out
