@@ -81,6 +81,14 @@ String mqttHost;
 
 // ---------------- компоненти ----------------
 
+/** Період розкладу термостата: з [min] хвилини доби у дні [days] (біт 0 — Пн … біт 6 — Нд). */
+struct Period {
+  uint8_t days = 0x7F;
+  uint16_t min = 0;
+  float temp = 20;
+  bool off = false;   // у цей період не гріти (і не охолоджувати)
+};
+
 enum CompType { C_RELAY, C_BUTTON, C_PWM, C_WS2812, C_DHT, C_DS18B20, C_AHT, C_ANALOG, C_INPUT, C_THERMO, C_BME, C_SHT21, C_TUYA, C_UNKNOWN };
 
 struct Comp {
@@ -123,7 +131,13 @@ struct Comp {
   bool enabled = true;
   uint32_t lastSwitch = 0;
   uint32_t sensorBadSince = 0;
-  String thermoState = "idle"; // idle | on | off | nosensor | offline
+  String thermoState = "idle"; // idle | on | off | nosensor | offline | schedoff
+  std::vector<Period> sched;   // розклад; порожній — завжди onAt/offAt
+  float effOn = 18, effOff = 19;   // пороги, що діють зараз (з розкладу чи ручні)
+  int curPeriod = -1, curKey = -1, nextKey = -1;   // ключ = хвилина тижня від Пн 00:00
+  int holdKey = -1;            // змінено вручну — діє до кінця періоду з цим ключем
+  float holdOn = 0, holdOff = 0;
+  bool schedOff = false;
   // розетка Tuya в тій самій мережі: плата керує нею напряму локальним протоколом
   String tId, tKey;
   char tIp[16] = "";
@@ -320,6 +334,16 @@ void buildCompsLocked(JsonArrayConst arr) {
         c.onAt = o["onAt"] | 18.0f;
         c.offAt = o["offAt"] | 19.0f;
         c.enabled = o["enabled"] | true;
+        c.effOn = c.onAt; c.effOff = c.offAt;
+        for (JsonObjectConst p : o["sched"].as<JsonArrayConst>()) {
+          if (c.sched.size() >= 16) break;
+          Period q;
+          q.days = (p["d"] | 0x7F) & 0x7F;
+          q.min = (p["t"] | 0) % 1440;
+          q.temp = p["temp"] | 20.0f;
+          q.off = p["x"] | false;
+          if (q.days) c.sched.push_back(q);
+        }
         break;
       case C_TUYA:
         c.tId = (const char*)(o["id"] | "");
@@ -339,12 +363,37 @@ void buildCompsLocked(JsonArrayConst arr) {
 }
 
 String configJson;  // збережений конфіг як є
+String tzPosix;     // часовий пояс у форматі POSIX (його передає додаток), напр. EET-2EEST,M3.5.0/3,M10.5.0/4
+
+void applyTz() {
+  setenv("TZ", tzPosix.isEmpty() ? "UTC0" : tzPosix.c_str(), 1);
+  tzset();
+}
+
+/** Час з інтернету (NTP) і місцевий пояс — для розкладу. */
+void startTime() {
+  configTime(0, 0, "pool.ntp.org", "time.google.com");
+  applyTz();
+}
+
+bool timeValid() { return time(nullptr) > 1700000000; }
+
+/** Поточна хвилина тижня (Пн 00:00 = 0) за місцевим часом або -1, якщо час ще невідомий. */
+int weekMinute() {
+  if (!timeValid()) return -1;
+  time_t t = time(nullptr);
+  struct tm lt;
+  localtime_r(&t, &lt);
+  return ((lt.tm_wday + 6) % 7) * 1440 + lt.tm_hour * 60 + lt.tm_min;
+}
 
 void loadConfig() {
   configJson = prefs.getString("cfg", "{\"comps\":[]}");
   JsonDocument doc;
   if (deserializeJson(doc, configJson)) { doc.clear(); doc["comps"].to<JsonArray>(); }
   deviceName = prefs.getString("name", deviceName);
+  tzPosix = prefs.getString("tz", "");
+  applyTz();
   buildComps(doc["comps"].as<JsonArrayConst>());
 }
 
@@ -480,6 +529,46 @@ void setRelay(Comp& c, bool on) {
  * Гістерезис між onAt і offAt, перемикання не частіше ніж раз на 30 с,
  * при втраті датчика на 60 с обігрів вимикається.
  */
+/** Який період розкладу діє зараз: індекс, його ключ і ключ наступної зміни. */
+static int activePeriod(const Comp& t, int nowKey, int* key, int* next) {
+  int best = -1, bestDist = 1 << 30, nextDist = 1 << 30;
+  *key = -1; *next = -1;
+  for (size_t i = 0; i < t.sched.size(); i++) {
+    for (int d = 0; d < 7; d++) {
+      if (!(t.sched[i].days & (1 << d))) continue;
+      int k = d * 1440 + t.sched[i].min;
+      int back = (nowKey - k + 10080) % 10080;
+      if (back < bestDist) { bestDist = back; best = i; *key = k; }
+      int fwd = (k - nowKey + 10080) % 10080;
+      if (fwd > 0 && fwd < nextDist) { nextDist = fwd; *next = k; }
+    }
+  }
+  return best;
+}
+
+/** Пороги, що діють зараз: ручні (до кінця періоду), з розкладу або основні. */
+static void thermoSetpoints(Comp& t) {
+  t.effOn = t.onAt; t.effOff = t.offAt;
+  t.schedOff = false;
+  t.curPeriod = -1;
+  int nowKey = t.sched.empty() ? -1 : weekMinute();
+  if (nowKey < 0) { t.holdKey = -1; return; }
+  int key, next;
+  int idx = activePeriod(t, nowKey, &key, &next);
+  t.nextKey = next;
+  if (idx < 0) return;
+  t.curPeriod = idx;
+  t.curKey = key;
+  if (t.holdKey >= 0 && t.holdKey != key) t.holdKey = -1;   // почався новий період — знову за розкладом
+  if (t.holdKey == key) { t.effOn = t.holdOn; t.effOff = t.holdOff; return; }
+  const Period& p = t.sched[idx];
+  if (p.off) { t.schedOff = true; return; }
+  float gap = fabsf(t.offAt - t.onAt);
+  if (gap < 0.2f) gap = 0.5f;
+  t.effOn = p.temp;
+  t.effOff = t.heat ? p.temp + gap : p.temp - gap;
+}
+
 void handleThermostats(uint32_t now) {
   for (auto& t : comps) {
     if (t.type != C_THERMO) continue;
@@ -488,6 +577,7 @@ void handleThermostats(uint32_t now) {
     Comp& relay = comps[t.target];
     if (relay.type != C_RELAY && relay.type != C_TUYA) continue;
     t.temp = sensor.temp;
+    thermoSetpoints(t);
     if (!t.enabled) { t.thermoState = "idle"; t.sensorBadSince = 0; continue; }
     if (isnan(sensor.temp)) {
       if (!t.sensorBadSince) t.sensorBadSince = now ? now : 1;
@@ -497,13 +587,14 @@ void handleThermostats(uint32_t now) {
     }
     t.sensorBadSince = 0;
     int want = -1;
-    if (t.heat) { if (sensor.temp <= t.onAt) want = 1; else if (sensor.temp >= t.offAt) want = 0; }
-    else { if (sensor.temp >= t.onAt) want = 1; else if (sensor.temp <= t.offAt) want = 0; }
+    if (t.schedOff) want = 0;
+    else if (t.heat) { if (sensor.temp <= t.effOn) want = 1; else if (sensor.temp >= t.effOff) want = 0; }
+    else { if (sensor.temp >= t.effOn) want = 1; else if (sensor.temp <= t.effOff) want = 0; }
     if (want >= 0 && (bool)want != relay.on && (t.lastSwitch == 0 || now - t.lastSwitch > 30000)) {
       t.lastSwitch = now;
       setRelay(relay, want == 1);
     }
-    t.thermoState = relay.on ? "on" : "off";
+    t.thermoState = relay.on ? "on" : t.schedOff ? "schedoff" : "off";
     if (relay.type == C_TUYA && !relay.tOnline && relay.tLastQuery) t.thermoState = "offline";
   }
 }
@@ -601,8 +692,20 @@ String stateJson(bool diag = true) {
         break;
       case C_THERMO:
         o["enabled"] = c.enabled; o["mode"] = c.heat ? "heat" : "cool";
-        putNum(o, "onAt", c.onAt); putNum(o, "offAt", c.offAt); putNum(o, "temp", c.temp);
+        putNum(o, "onAt", c.effOn); putNum(o, "offAt", c.effOff); putNum(o, "temp", c.temp);
         o["sensor"] = c.sensor; o["target"] = c.target; o["state"] = c.thermoState;
+        if (!c.sched.empty()) {
+          JsonObject sc = o["sched"].to<JsonObject>();
+          sc["n"] = c.sched.size();
+          sc["time"] = timeValid();
+          sc["period"] = c.curPeriod;
+          if (c.curPeriod >= 0) {
+            sc["hold"] = c.holdKey >= 0;
+            sc["off"] = c.schedOff;
+            sc["next"] = c.nextKey;
+          }
+          putNum(sc, "baseOn", c.onAt); putNum(sc, "baseOff", c.offAt);
+        }
         break;
       case C_TUYA:
         if (c.tKnown) o["on"] = c.on; else o["on"] = nullptr;
@@ -711,8 +814,23 @@ void applyCommands(JsonVariant doc) {
       if (toggle) toggleTuya(c);
     } else if (c.type == C_THERMO) {
       if (o["enabled"].is<bool>()) c.enabled = o["enabled"];
-      if (o["onAt"].is<float>()) c.onAt = o["onAt"];
-      if (o["offAt"].is<float>()) c.offAt = o["offAt"];
+      if (c.curPeriod >= 0 && (o["onAt"].is<float>() || o["offAt"].is<float>())) {
+        // діє розклад: зміна з додатку — лише до початку наступного періоду
+        if (c.holdKey != c.curKey) {
+          c.holdKey = c.curKey;
+          bool wasOff = c.schedOff;
+          c.holdOn = wasOff ? c.onAt : c.effOn;
+          c.holdOff = wasOff ? c.offAt : c.effOff;
+        }
+        if (o["onAt"].is<float>()) c.holdOn = o["onAt"];
+        if (o["offAt"].is<float>()) c.holdOff = o["offAt"];
+        thermoSetpoints(c);
+      } else {
+        if (o["onAt"].is<float>()) c.onAt = o["onAt"];
+        if (o["offAt"].is<float>()) c.offAt = o["offAt"];
+        c.effOn = c.onAt; c.effOff = c.offAt;
+      }
+      if (o["resume"] | false) { c.holdKey = -1; thermoSetpoints(c); }
       if (o["mode"].is<const char*>()) c.heat = String((const char*)o["mode"]) != "cool";
       c.lastSwitch = 0;
       persistThermo(i);
@@ -742,6 +860,11 @@ void handleConfigPost() {
   if (doc["name"].is<const char*>()) {
     deviceName = (const char*)doc["name"];
     prefs.putString("name", deviceName);
+  }
+  if (doc["tz"].is<const char*>()) {
+    tzPosix = (const char*)doc["tz"];
+    prefs.putString("tz", tzPosix);
+    applyTz();
   }
   if (doc["comps"].is<JsonArray>()) {
     JsonDocument cfg;
@@ -870,7 +993,7 @@ void mqttApplySettings() {
 void mqttLoop(uint32_t now) {
   if (!mqttEnabled) return;
   if (WiFi.status() != WL_CONNECTED) { mqttStatus = "no wifi"; return; }
-  if (!timeStarted) { configTime(0, 0, "pool.ntp.org", "time.google.com"); timeStarted = true; }
+  if (!timeStarted) { startTime(); timeStarted = true; }
   // для перевірки сертифіката потрібен правильний час
   if (mqttPort != 1883 && time(nullptr) < 1700000000) { mqttStatus = "waiting time"; return; }
   if (!mqtt.connected()) {
@@ -1061,6 +1184,7 @@ void applyFlashedSettings() {
       prefs.putString("pass", (const char*)(d["pass"] | ""));
     }
     if (d["name"].is<const char*>()) prefs.putString("name", (const char*)d["name"]);
+    if (d["tz"].is<const char*>()) prefs.putString("tz", (const char*)d["tz"]);
     if (d["key"].is<const char*>() && strlen((const char*)d["key"]) >= 8) prefs.putString("key", (const char*)d["key"]);
     if (d["comps"].is<JsonArray>()) {
       JsonDocument cfg;
@@ -1328,7 +1452,7 @@ void loop() {
     if (WiFi.status() == WL_CONNECTED) {
       lastStaOk = now;
       startMdns();
-      if (!timeStarted) { configTime(0, 0, "pool.ntp.org", "time.google.com"); timeStarted = true; }
+      if (!timeStarted) { startTime(); timeStarted = true; }
       if (apMode && now - staStartedAt > 5000) stopAp();
     } else if (!apMode && now - max(staStartedAt, lastStaOk) > STA_TIMEOUT) {
       startAp();

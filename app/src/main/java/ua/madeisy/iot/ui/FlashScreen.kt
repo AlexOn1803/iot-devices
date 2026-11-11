@@ -259,6 +259,7 @@ fun FlashScreen(nav: Nav) {
                         val key = EspClient.newKey()
                         val j = org.json.JSONObject().put("key", key)
                         if (setupName.isNotBlank()) j.put("name", setupName.trim())
+                        j.put("tz", runCatching { ua.madeisy.iot.esp.PosixTz.current() }.getOrDefault("UTC0"))
                         if (ssid.isNotBlank()) j.put("ssid", ssid.trim()).put("pass", pass)
                         if (setupComps.isNotEmpty()) j.put("comps", org.json.JSONArray(setupComps.map { it.toJson() }))
                         setupLed?.let { j.put("led", it) }

@@ -61,6 +61,8 @@ data class EspCompConfig(
     val tuyaIp: String = "",
     val tuyaVer: String = "3.3",
     val tuyaDp: Int = 1,
+    /** Розклад термостата на платі. */
+    val sched: List<SchedPeriod> = emptyList(),
 ) {
     fun toJson(): JSONObject {
         val o = JSONObject().put("t", type.code).put("name", name)
@@ -76,6 +78,7 @@ data class EspCompConfig(
             EspType.INPUT -> o.put("pin", pin).put("inv", inv).put("pull", pull)
             EspType.THERMO -> o.put("sensor", sensor).put("target", target).put("mode", if (heat) "heat" else "cool")
                 .put("onAt", onAt).put("offAt", offAt).put("enabled", enabled)
+                .apply { if (sched.isNotEmpty()) put("sched", JSONArray().apply { sched.forEach { put(it.toJson()) } }) }
             EspType.TUYA -> o.put("dev", tuyaKey).put("id", tuyaId).put("key", tuyaLocalKey).put("ip", tuyaIp)
                 .put("ver", tuyaVer).put("dp", tuyaDp)
             EspType.UNKNOWN -> {}
@@ -106,6 +109,8 @@ data class EspCompConfig(
                 onAt = o.optDouble("onAt", 18.0), offAt = o.optDouble("offAt", 19.0), enabled = o.optBoolean("enabled", true),
                 tuyaKey = o.optString("dev"), tuyaId = o.optString("id"), tuyaLocalKey = o.optString("key"),
                 tuyaIp = o.optString("ip"), tuyaVer = o.optString("ver", "3.3"), tuyaDp = o.optInt("dp", 1),
+                sched = o.optJSONArray("sched")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(SchedPeriod::fromJson) } }
+                    ?: emptyList(),
             )
         }
 
@@ -116,6 +121,7 @@ data class EspCompConfig(
 
         fun listToJson(name: String, list: List<EspCompConfig>): JSONObject =
             JSONObject().put("name", name).put("comps", JSONArray().apply { list.forEach { put(it.toJson()) } })
+                .put("tz", runCatching { PosixTz.current() }.getOrDefault("UTC0"))
 
         /** Піни, доступні для компонентів на кожній платі. */
         fun pinsFor(board: String): List<Int> = when (board) {
@@ -204,6 +210,7 @@ data class EspComp(
     val online: Boolean? = null,
     val error: String? = null,
     val pending: Boolean? = null,
+    val sched: SchedState? = null,
 ) {
     val isSwitchable: Boolean get() = type == EspType.RELAY || type == EspType.PWM || type == EspType.WS2812 || type == EspType.TUYA
 
@@ -229,6 +236,7 @@ data class EspComp(
                 pres = o.optDoubleOrNull("pres"), model = o.optString("model").ifEmpty { null },
                 online = o.optBoolOrNull("online"), error = o.optString("err").ifEmpty { null },
                 pending = o.optBoolOrNull("pending"),
+                sched = SchedState.fromJson(o.optJSONObject("sched")),
             )
         }
 
@@ -277,5 +285,61 @@ data class EspState(
         if (c.countdown <= 0) return null
         val left = c.countdown - ((now - updatedAt) / 1000).toInt()
         return left.takeIf { it > 0 }
+    }
+}
+
+
+/**
+ * Період розкладу: з [minute] хвилини доби у дні [days] (біт 0 — Пн … біт 6 — Нд)
+ * тримати [temp] (увімкнути, коли ≤ temp; вимкнути на «запас» вище) або [off] — не гріти.
+ */
+data class SchedPeriod(val days: Int = 0x7F, val minute: Int = 7 * 60, val temp: Double = 21.0, val off: Boolean = false) {
+    fun toJson(): JSONObject = JSONObject().put("d", days).put("t", minute).apply { if (off) put("x", true) else put("temp", temp) }
+
+    val timeText: String get() = "%02d:%02d".format(minute / 60, minute % 60)
+
+    companion object {
+        val DAY_NAMES = listOf("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд")
+        const val WORKDAYS = 0x1F
+        const val WEEKEND = 0x60
+
+        fun fromJson(o: JSONObject) = SchedPeriod(
+            o.optInt("d", 0x7F), o.optInt("t", 0), o.optDouble("temp", 21.0), o.optBoolean("x", false),
+        )
+
+        fun daysText(d: Int): String = when (d and 0x7F) {
+            0x7F -> "щодня"
+            WORKDAYS -> "Пн–Пт"
+            WEEKEND -> "Сб–Нд"
+            else -> DAY_NAMES.filterIndexed { i, _ -> d and (1 shl i) != 0 }.joinToString(", ")
+        }
+
+        /** Хвилина тижня (Пн 00:00 = 0) як «Пн 07:00». */
+        fun weekKeyText(k: Int): String = DAY_NAMES[(k / 1440) % 7] + " " + "%02d:%02d".format(k % 1440 / 60, k % 60)
+
+        /** Типовий тижневий розклад для обігріву. */
+        fun template(): List<SchedPeriod> = listOf(
+            SchedPeriod(WORKDAYS, 6 * 60 + 30, 21.0),
+            SchedPeriod(WORKDAYS, 8 * 60 + 30, 17.0),
+            SchedPeriod(WORKDAYS, 17 * 60 + 30, 21.0),
+            SchedPeriod(0x7F, 23 * 60, 18.0),
+            SchedPeriod(WEEKEND, 8 * 60, 21.0),
+        )
+    }
+}
+
+/** Стан розкладу, який повідомляє плата. */
+data class SchedState(
+    val count: Int, val timeOk: Boolean, val period: Int, val hold: Boolean, val off: Boolean, val next: Int,
+    val baseOn: Double?, val baseOff: Double?,
+) {
+    companion object {
+        fun fromJson(o: JSONObject?): SchedState? = o?.let {
+            SchedState(
+                it.optInt("n"), it.optBoolean("time"), it.optInt("period", -1), it.optBoolean("hold"),
+                it.optBoolean("off"), it.optInt("next", -1),
+                if (it.has("baseOn")) it.optDouble("baseOn") else null, if (it.has("baseOff")) it.optDouble("baseOff") else null,
+            )
+        }
     }
 }

@@ -62,6 +62,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -306,7 +309,7 @@ private fun EspCompCard(c: EspComp, s: EspState, send: (JSONObject) -> Unit) {
                     Text(
                         (if (c.heat) "Обігрів" else "Охолодження") + " · " + (relay?.name ?: "реле ?") + ": " + when (c.thermoState) {
                             "on" -> "працює"; "off" -> "вимкнено"; "nosensor" -> "немає даних з датчика"
-                            "offline" -> "розетка не відповідає"; else -> "термостат вимкнено"
+                            "offline" -> "розетка не відповідає"; "schedoff" -> "вимкнено за розкладом"; else -> "термостат вимкнено"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = when (c.thermoState) {
@@ -326,8 +329,27 @@ private fun EspCompCard(c: EspComp, s: EspState, send: (JSONObject) -> Unit) {
             TempStepper(if (c.heat) "Вимкнути, коли ≥" else "Вимкнути, коли ≤", off) { v ->
                 if (if (c.heat) v > on else v < on) send(JSONObject().put("offAt", v))
             }
+            c.sched?.let { sc ->
+                val until = if (sc.next >= 0) " до ${ua.madeisy.iot.esp.SchedPeriod.weekKeyText(sc.next)}" else ""
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        when {
+                            !sc.timeOk -> "Розклад чекає точного часу з інтернету — поки діють основні пороги"
+                            sc.period < 0 -> "Розклад: немає періодів"
+                            sc.hold -> "Змінено вручну$until, потім знову за розкладом"
+                            sc.off -> "За розкладом: не гріти$until"
+                            else -> "За розкладом$until"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (sc.hold) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (sc.hold) TextButton(onClick = { send(JSONObject().put("resume", true)) }) { Text("За розкладом") }
+                }
+            }
             Text(
-                "Працює на самій платі — навіть без телефона й Wi-Fi.",
+                "Працює на самій платі — навіть без телефона й Wi-Fi." +
+                    if (c.sched != null) " Розклад змінюється в налаштуваннях плати." else "",
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -861,6 +883,8 @@ private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompC
                             "Плата перемикає реле не частіше ніж раз на 30 с. Якщо датчик не відповідає хвилину, обігрів вимикається.",
                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        HorizontalDivider()
+                        ScheduleEditor(c.sched, c.heat, kotlin.math.abs(c.offAt - c.onAt)) { c = c.copy(sched = it) }
                     }
                     else -> {}
                 }
@@ -1052,6 +1076,75 @@ private fun TuyaPlugPicker(c: EspCompConfig, onChange: (EspCompConfig) -> Unit) 
     Text(
         "Розетка має бути в тій самій Wi-Fi мережі, що й плата. Local key зберігається лише на платі й у додатку. " +
             "Розетка Tuya приймає одне локальне з'єднання за раз, тому додаток підключатиметься до неї ненадовго, щоб не заважати платі.",
+        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+
+/** Тижневий розклад термостата: періоди «з HH:MM у ці дні — тримати T °C / не гріти». */
+@Composable
+private fun ScheduleEditor(list: List<ua.madeisy.iot.esp.SchedPeriod>, heat: Boolean, gap: Double, onChange: (List<ua.madeisy.iot.esp.SchedPeriod>) -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val days = ua.madeisy.iot.esp.SchedPeriod.DAY_NAMES
+    Text("Розклад", style = MaterialTheme.typography.labelLarge)
+    if (list.isEmpty()) {
+        Text(
+            "Без розкладу термостат завжди тримає пороги вище. З розкладом плата сама міняє температуру за часом " +
+                "(час бере з інтернету, пояс — з телефона), навіть коли телефон вимкнений.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { onChange(ua.madeisy.iot.esp.SchedPeriod.template()) }) { Text("Типовий тиждень") }
+            OutlinedButton(onClick = { onChange(listOf(ua.madeisy.iot.esp.SchedPeriod())) }) { Text("Порожній") }
+        }
+        return
+    }
+    val sorted = list.withIndex().sortedBy { it.value.minute }
+    sorted.forEach { (i, p) ->
+        fun set(np: ua.madeisy.iot.esp.SchedPeriod) = onChange(list.toMutableList().also { it[i] = np })
+        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+            Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = {
+                        android.app.TimePickerDialog(ctx, { _, h, m -> set(p.copy(minute = h * 60 + m)) }, p.minute / 60, p.minute % 60, true).show()
+                    }) { Text("з ${p.timeText}", style = MaterialTheme.typography.titleMedium) }
+                    Text(ua.madeisy.iot.esp.SchedPeriod.daysText(p.days), style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    IconButton(onClick = { onChange(list.toMutableList().also { it.removeAt(i) }) }) { Icon(Icons.Filled.Delete, "Видалити") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    days.forEachIndexed { d, name ->
+                        val on = p.days and (1 shl d) != 0
+                        Surface(
+                            shape = androidx.compose.foundation.shape.CircleShape,
+                            color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface,
+                            modifier = Modifier.size(34.dp).clickable {
+                                val nd = p.days xor (1 shl d)
+                                if (nd != 0) set(p.copy(days = nd))
+                            },
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(name, style = MaterialTheme.typography.labelSmall,
+                                    color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+                    }
+                }
+                CheckRow(if (heat) "Не гріти в цей час" else "Не охолоджувати в цей час", p.off) { set(p.copy(off = it)) }
+                if (!p.off) TempStepper(if (heat) "Тримати від" else "Тримати до", p.temp) { set(p.copy(temp = it)) }
+            }
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (list.size < 16) OutlinedButton(onClick = {
+            val last = sorted.last().value
+            onChange(list + last.copy(minute = (last.minute + 60).coerceAtMost(23 * 60 + 59)))
+        }) { Text("Додати період") }
+        TextButton(onClick = { onChange(emptyList()) }) { Text("Без розкладу") }
+    }
+    Text(
+        "Кожен період діє до початку наступного. Для обігріву: вмикається, коли ≤ температури періоду, " +
+            "вимикається на ${String.format(Locale.US, "%.1f", if (gap < 0.2) 0.5 else gap)}° вище (різниця основних порогів). " +
+            "Якщо змінити температуру на екрані плати, це діятиме до наступного періоду.",
         style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
