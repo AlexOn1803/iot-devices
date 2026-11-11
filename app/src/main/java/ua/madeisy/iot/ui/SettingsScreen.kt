@@ -244,12 +244,12 @@ private fun MqttCard(snackbar: SnackbarHostState) {
 
     SectionCard("Плати ESP через інтернет (MQTT)") {
         Text(
-            "Щоб керувати платами поза домом. Безкоштовно: hivemq.com → Sign up → Create Serverless Cluster → Access Management → додай логін і пароль (Publish and Subscribe). Адресу кластера скопіюй з Overview (…hivemq.cloud), порт 8883.",
+            "Щоб керувати платами поза домом. Безкоштовно: emqx.com → Sign up → New Deployment → Serverless (Spend limit: Free quota only) → Access Control → Authentication → Add: логін і пароль латиницею. Адресу скопіюй з Overview (…emqxsl.com), порт 8883.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(host, { host = it.trim() }, label = { Text("Адреса брокера") }, singleLine = true,
-            placeholder = { Text("xxxx.s1.eu.hivemq.cloud") }, modifier = Modifier.fillMaxWidth())
+            placeholder = { Text("xxxx.ala.eu-central-1.emqxsl.com") }, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(port, { port = it.filter { c -> c.isDigit() }.take(5) }, label = { Text("Порт") }, singleLine = true,
