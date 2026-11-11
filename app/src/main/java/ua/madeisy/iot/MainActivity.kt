@@ -128,6 +128,7 @@ private fun AppRoot(openDevice: String?, consumed: () -> Unit) {
             Screen.Flash -> FlashScreen(nav)
             Screen.Settings -> SettingsScreen(nav)
             Screen.Help -> HelpScreen(nav)
+            Screen.MqttHelp -> MqttHelpScreen(nav)
         }
     }
 }

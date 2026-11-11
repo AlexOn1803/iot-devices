@@ -6,6 +6,7 @@ sealed interface Screen {
     data class Edit(val key: String?) : Screen
     data object Settings : Screen
     data object Help : Screen
+    data object MqttHelp : Screen
     data object AddEsp : Screen
     data object Thermostats : Screen
     data object Flash : Screen

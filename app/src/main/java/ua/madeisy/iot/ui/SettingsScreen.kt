@@ -171,7 +171,7 @@ fun SettingsScreen(nav: Nav) {
                 }
             }
 
-            MqttCard(snackbar)
+            MqttCard(snackbar, nav)
 
             SectionCard("Загальне") {
                 OutlinedTextField(
@@ -229,7 +229,7 @@ fun SettingsScreen(nav: Nav) {
 }
 
 @Composable
-private fun MqttCard(snackbar: SnackbarHostState) {
+private fun MqttCard(snackbar: SnackbarHostState, nav: Nav) {
     val app = IotApp.instance
     val saved by app.storage.mqtt.collectAsState()
     val status by app.controller.mqtt.status.collectAsState()
@@ -244,9 +244,12 @@ private fun MqttCard(snackbar: SnackbarHostState) {
 
     SectionCard("Плати ESP через інтернет (MQTT)") {
         Text(
-            "Щоб керувати платами поза домом. Безкоштовно: emqx.com → Sign up → New Deployment → Serverless (Spend limit: Free quota only) → Access Control → Authentication → Add: логін і пароль латиницею. Адресу скопіюй з Overview (…emqxsl.com), порт 8883.",
+            "Щоб керувати платами поза домом (мобільний інтернет, інший Wi-Fi). Потрібен MQTT-брокер — безкоштовний EMQX Serverless створюється за 5 хвилин.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        OutlinedButton(onClick = { nav.push(Screen.MqttHelp) }, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+            Text("Як створити безкоштовний брокер")
+        }
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(host, { host = it.trim() }, label = { Text("Адреса брокера") }, singleLine = true,
             placeholder = { Text("xxxx.ala.eu-central-1.emqxsl.com") }, modifier = Modifier.fillMaxWidth())
@@ -374,6 +377,74 @@ fun HelpScreen(nav: Nav) {
                         "• Безкоштовний доступ до хмари Tuya треба раз на кілька місяців продовжувати в кабінеті (Cloud → Cloud Services → IoT Core → Extend).\n" +
                         "• Локальне керування працює без хмари і без продовження.\n" +
                         "• Закріпи за розетками постійні IP у роутері (DHCP reservation) — тоді з'єднання буде найстабільнішим.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+    }
+}
+
+
+@Composable
+fun MqttHelpScreen(nav: Nav) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    fun open(url: String) = runCatching {
+        ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+    }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Брокер MQTT (EMQX)") },
+                navigationIcon = { IconButton(onClick = { nav.pop() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") } },
+            )
+        },
+    ) { pad ->
+        Column(
+            Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                "Брокер — це сервер в інтернеті, через який плати й телефон знаходять одне одного, коли ви не вдома. " +
+                    "Плата сама тримає з ним зв'язок цілодобово.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            val steps = listOf(
+                "Відкрий emqx.com → Sign up → «Sign in with Google» (або email). Картка не потрібна.",
+                "У консолі: Project (можна той, що створився сам) → EMQX Broker → New.",
+                "Вибери план Serverless (не Dedicated Flex — він платний після пробного періоду). Region — Europe.",
+                "Spend Limit — «Free quota only». Тоді грошей не спише ніколи: при вичерпанні ліміту брокер просто призупиниться до наступного місяця.",
+                "Назва — будь-яка (напр. iot-devices) → Deploy. За хвилину статус стане Running.",
+                "Відкрий брокер → Overview → «MQTT Connection Information»: скопіюй Address (…emqxsl.com). Порт — 8883.",
+                "Access Control → Authentication → Add: Username і Password. Пароль — латиницею (перевір розкладку!), 12+ символів → Confirm.",
+                "Повернись сюди: Налаштування → картка MQTT. Встав адресу, порт 8883, логін і пароль → «Перевірити» (має бути «підключено») → «Зберегти».",
+                "Удома, в одній мережі з платами, відкрий кожну плату в додатку — вона отримає налаштування брокера. Нові плати, прошиті з додатку, отримують їх разом з прошивкою.",
+                "Перевір: вимкни Wi-Fi на телефоні й відкрий плату через мобільний інтернет.",
+            )
+            steps.forEachIndexed { i, t ->
+                Row {
+                    Text("${i + 1}.", style = MaterialTheme.typography.titleMedium, modifier = Modifier.width(28.dp))
+                    Text(t, style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+            Button(onClick = { open("https://accounts.emqx.com/signup?continue=https://cloud-intl.emqx.com/console") }, modifier = Modifier.fillMaxWidth()) {
+                Text("Відкрити EMQX")
+            }
+            SectionCard("Безкоштовні ліміти (щомісяця)") {
+                Text(
+                    "• 1 млн хвилин підключення — це ≈ 22 пристрої онлайн цілодобово (плати + телефон).\n" +
+                        "• 1 ГБ трафіку. Плата надсилає перемикання одразу, а покази датчиків — не частіше ніж раз на 20 с: " +
+                        "це ≈ 50–100 МБ на плату за місяць.\n" +
+                        "• До 1000 одночасних підключень.\n" +
+                        "• Скільки витрачено — видно в Overview брокера.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            SectionCard("Важливо") {
+                Text(
+                    "• «Невірний логін або пароль» — найчастіше пароль набрано не тією розкладкою. Задай його в EMQX заново (олівець біля логіна).\n" +
+                        "• Кожну команду плата перевіряє своїм ключем доступу, тож навіть знаючи логін брокера, чужий нею не покерує.\n" +
+                        "• Розетки Tuya працюють через хмару Tuya — брокер потрібен лише для плат ESP.\n" +
+                        "• HiveMQ більше не має безкоштовного плану — використовуй EMQX.",
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
