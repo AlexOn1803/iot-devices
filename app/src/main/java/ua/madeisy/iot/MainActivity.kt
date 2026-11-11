@@ -35,6 +35,7 @@ import ua.madeisy.iot.ui.FlashScreen
 import ua.madeisy.iot.ui.EspConfigScreen
 import ua.madeisy.iot.ui.EspDeviceScreen
 import ua.madeisy.iot.ui.HelpScreen
+import ua.madeisy.iot.ui.MqttHelpScreen
 import ua.madeisy.iot.ui.HomeScreen
 import ua.madeisy.iot.ui.Nav
 import ua.madeisy.iot.ui.Screen
