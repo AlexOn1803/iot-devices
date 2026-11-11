@@ -948,6 +948,25 @@ uint32_t mqttLastTry = 0, mqttRetryMs = 5000, mqttLastCheck = 0, mqttLastFull = 
 String mqttLastState;
 bool timeStarted = false;
 
+String mqttLastSwitch;
+
+/** Стан виходів і термостатів — те, що має доходити до телефона одразу. */
+String switchSignature() {
+  String s;
+  for (auto& c : comps) {
+    s += c.on ? '1' : '0';
+    s += c.active ? '1' : '0';
+    s += c.enabled ? '1' : '0';
+    s += (char)('0' + (c.tWant + 1));
+    s += c.tOnline ? '1' : '0';
+    if (c.type == C_THERMO) { s += c.thermoState; s += String(c.effOn, 1); s += String(c.effOff, 1); s += c.holdKey >= 0 ? 'h' : '-'; }
+    if (c.type == C_PWM || c.type == C_WS2812) { s += String(c.bri); s += String(c.r) + String(c.g) + String(c.b); s += c.fx; }
+    s += c.countdownEnd ? 'c' : '-';
+    s += '|';
+  }
+  return s;
+}
+
 String mqttTopic(const char* t) { return "iotdev/" + deviceId + "/" + t; }
 
 void mqttCallback(char* topic, byte* payload, unsigned int len) {
@@ -956,7 +975,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int len) {
   // команди мають бути підписані ключем плати — інакше їх ігноруємо
   if (!apiKey.isEmpty() && String((const char*)(d["key"] | "")) != apiKey) return;
   if (!d["cmds"].isNull()) applyCommands(d["cmds"]);
-  mqttLastState = "";  // одразу опублікувати новий стан
+  mqttLastState = ""; mqttLastSwitch = "";  // одразу опублікувати новий стан
 }
 
 void mqttApplySettings() {
@@ -1011,14 +1030,19 @@ void mqttLoop(uint32_t now) {
     mqtt.publish(st.c_str(), "online", true);
     mqtt.publish(mqttTopic("info").c_str(), infoJson().c_str(), true);
     mqtt.subscribe(mqttTopic("set").c_str(), 1);
-    mqttLastState = "";
+    mqttLastState = ""; mqttLastSwitch = "";
   }
   mqtt.loop();
+  // Трафік безкоштовного брокера обмежений (EMQX: 1 ГБ/міс.), тож:
+  // перемикання — одразу; зміни показів датчиків — не частіше ніж раз на 20 с; без змін — раз на 2 хв.
   if (now - mqttLastCheck > 1000) {
     mqttLastCheck = now;
-    String st = stateJson(false);
-    if (st != mqttLastState || now - mqttLastFull > 60000) {
-      mqttLastState = st;
+    String sw = switchSignature();
+    bool switched = sw != mqttLastSwitch;
+    bool sensorsDue = now - mqttLastFull > 20000 && stateJson(false) != mqttLastState;
+    if (switched || sensorsDue || now - mqttLastFull > 120000) {
+      mqttLastSwitch = sw;
+      mqttLastState = stateJson(false);
       mqttLastFull = now;
       mqtt.publish(mqttTopic("state").c_str(), stateJson(true).c_str(), true);
     }
