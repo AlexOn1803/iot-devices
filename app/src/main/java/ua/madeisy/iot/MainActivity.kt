@@ -56,6 +56,21 @@ class IotApp : Application() {
         thermostats = ThermostatEngine(this, storage, controller).also { it.start() }
         Notifications.createChannels(this)
         ScheduleManager.rescheduleAll(this)
+        watchNetwork()
+    }
+
+    /** Після зміни мережі (Wi-Fi ↔ мобільний) одразу перепідключаємо MQTT, а не чекаємо, поки старе з'єднання «помре». */
+    private fun watchNetwork() {
+        val cm = getSystemService(android.net.ConnectivityManager::class.java) ?: return
+        var last: android.net.Network? = null
+        runCatching {
+            cm.registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    if (last != null && last != network) controller.mqtt.reconnectNow()
+                    last = network
+                }
+            })
+        }
     }
 
     companion object {

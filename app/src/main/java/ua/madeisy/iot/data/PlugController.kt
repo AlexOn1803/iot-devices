@@ -257,6 +257,7 @@ class PlugController(
         ensureMqtt()
         while (currentCoroutineContext().isActive) {
             val cfg = storage.device(key) ?: return
+            ensureMqtt()   // якщо з'єднання з брокером обірвалось — перепідключить (не частіше ніж раз на 10 с)
             val now = System.currentTimeMillis()
             // поза домом не смикаємо локальну адресу щодві секунди — лише раз на 20 с
             val remoteNow = espState(key).remote && espState(key).online

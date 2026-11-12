@@ -53,9 +53,14 @@ class EspMqtt {
 
     val connected: Boolean get() = client?.isConnected == true
 
+    @Volatile private var connecting = false
+    @Volatile private var lostAt = 0L
+    @Volatile private var lastAttempt = 0L
+
     private fun options(s: MqttSettings) = MqttConnectOptions().apply {
         isCleanSession = true
-        isAutomaticReconnect = true
+        // власне перепідключення (див. ensure): вбудоване в Paho після сну телефона чи зміни мережі часто «зависає»
+        isAutomaticReconnect = false
         connectionTimeout = 10
         keepAliveInterval = 45
         if (s.user.isNotBlank()) userName = s.user
@@ -64,12 +69,21 @@ class EspMqtt {
     }
 
     /** Під'єднатися (або перепід'єднатися при зміні налаштувань). Безпечно викликати часто. */
-    fun ensure(s: MqttSettings) {
+    fun ensure(s: MqttSettings, force: Boolean = false) {
         if (!s.configured) { stop(); return }
+        val now = System.currentTimeMillis()
         synchronized(this) {
-            if (current == s && client != null) return
+            val c = client
+            if (current == s && !force) {
+                if (connecting) return
+                if (c != null && c.isConnected) return
+                // розірвано або попередня спроба не вдалась — повтор не частіше ніж раз на 10 с
+                if (now - lastAttempt < 10_000) return
+            }
             stopLocked()
             current = s
+            connecting = true
+            lastAttempt = now
         }
         scope.launch {
             try {
@@ -80,7 +94,10 @@ class EspMqtt {
                         _status.value = "підключено"
                         runCatching { c.subscribe(arrayOf("iotdev/+/state", "iotdev/+/status"), intArrayOf(0, 0)) }
                     }
-                    override fun connectionLost(cause: Throwable?) { _status.value = "зв'язок втрачено, перепідключення…" }
+                    override fun connectionLost(cause: Throwable?) {
+                        lostAt = System.currentTimeMillis()
+                        _status.value = "зв'язок втрачено, перепідключення…"
+                    }
                     override fun messageArrived(topic: String, message: MqttMessage) = onMessage(topic, message)
                     override fun deliveryComplete(token: IMqttDeliveryToken?) {}
                 })
@@ -91,10 +108,10 @@ class EspMqtt {
                 c.subscribe(arrayOf("iotdev/+/state", "iotdev/+/status"), intArrayOf(0, 0))
             } catch (e: MqttException) {
                 _status.value = "помилка: ${explain(e)}"
-                synchronized(this@EspMqtt) { client = null; current = null }
             } catch (e: Exception) {
                 _status.value = "помилка: ${e.message}"
-                synchronized(this@EspMqtt) { client = null; current = null }
+            } finally {
+                connecting = false
             }
         }
     }
@@ -127,6 +144,13 @@ class EspMqtt {
     }
 
     fun stop() = synchronized(this) { stopLocked() }
+
+    /** Мережа телефона змінилась (Wi-Fi ↔ мобільний): старе з'єднання, найімовірніше, мертве. */
+    fun reconnectNow() {
+        val s = current ?: return
+        lastAttempt = 0
+        ensure(s, force = true)
+    }
 
     private fun stopLocked() {
         val c = client
