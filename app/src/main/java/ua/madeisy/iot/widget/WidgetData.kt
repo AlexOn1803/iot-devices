@@ -54,7 +54,14 @@ data class WidgetCfg(
     }
 }
 
-data class Metric(val id: String, val label: String, val value: String)
+/** [short] — коротка позначка для тісних віджетів (значок або слово); "" — значення говорить саме за себе. */
+data class Metric(val id: String, val label: String, val value: String, val short: String? = null) {
+    val compact: String get() = when {
+        short == null -> "$label: $value"
+        short.isEmpty() -> value
+        else -> "$short $value"
+    }
+}
 
 /** Які дані пристрою можна показати на віджеті, і їхні поточні значення. */
 object WidgetData {
@@ -78,13 +85,13 @@ object WidgetData {
         val st = IotApp.instance.inverters.stateOf(d.sn)
         val s = st.summary
         val out = mutableListOf(
-            Metric("pv", "Сонце", kw(s.pvW)),
-            Metric("soc", "Батарея", s.socPct?.let { "${it.toInt()} %" } ?: "—"),
-            Metric("load", "Навантаження", kw(s.loadW)),
-            Metric("grid", "Мережа", when (s.gridPresent) { true -> s.gridV?.let { "${it.toInt()} В" } ?: "є"; false -> "немає"; null -> "—" }),
-            Metric("batt", "Заряд/розряд", s.batteryW?.let { if (it >= 0) "+" + kw(it) else "−" + kw(-it) } ?: "—"),
-            Metric("bv", "Напруга батареї", s.batteryV?.let { String.format(Locale.US, "%.1f В", it) } ?: "—"),
-            Metric("mode", "Режим", s.mode?.let { ua.madeisy.iot.inverter.EssSummary.modeUa(it) } ?: "—"),
+            Metric("pv", "Сонце", kw(s.pvW), "☀"),
+            Metric("soc", "Батарея", s.socPct?.let { "${it.toInt()} %" } ?: "—", "🔋"),
+            Metric("load", "Навантаження", kw(s.loadW), "🏠"),
+            Metric("grid", "Мережа", when (s.gridPresent) { true -> s.gridV?.let { "${it.toInt()} В" } ?: "є"; false -> "немає"; null -> "—" }, "⚡"),
+            Metric("batt", "Заряд/розряд", s.batteryW?.let { if (it >= 0) "+" + kw(it) else "−" + kw(-it) } ?: "—", "🔋"),
+            Metric("bv", "Напруга батареї", s.batteryV?.let { String.format(Locale.US, "%.1f В", it) } ?: "—", "🔋"),
+            Metric("mode", "Режим", s.mode?.let { ua.madeisy.iot.inverter.EssSummary.modeUa(it) } ?: "—", ""),
         )
         st.points.forEach { p ->
             out += Metric("pt:" + p.title, ua.madeisy.iot.inverter.EssSummary.titleUa(p.title),
@@ -125,11 +132,11 @@ object WidgetData {
         if (!cfg.isEsp) {
             val s = c.state(cfg.key)
             return listOf(
-                Metric("power", "Потужність", if (s.on == false) "0 Вт" else formatPower(s.powerW)),
-                Metric("voltage", "Напруга", s.voltageV?.let { "${f1(it)} В" } ?: "—"),
-                Metric("current", "Струм", s.currentA?.let { String.format(Locale.US, "%.2f А", it) } ?: "—"),
-                Metric("today", "Сьогодні", formatEnergy(todayKwh(cfg.key))),
-                Metric("state", "Стан", when (s.on) { true -> "Увімк."; false -> "Вимк."; null -> "—" }),
+                Metric("power", "Потужність", if (s.on == false) "0 Вт" else formatPower(s.powerW), ""),
+                Metric("voltage", "Напруга", s.voltageV?.let { "${f1(it)} В" } ?: "—", ""),
+                Metric("current", "Струм", s.currentA?.let { String.format(Locale.US, "%.2f А", it) } ?: "—", ""),
+                Metric("today", "Сьогодні", formatEnergy(todayKwh(cfg.key)), "Сьогодні"),
+                Metric("state", "Стан", when (s.on) { true -> "Увімк."; false -> "Вимк."; null -> "—" }, ""),
             )
         }
         val out = mutableListOf<Metric>()
@@ -145,8 +152,8 @@ object WidgetData {
             EspType.DHT, EspType.AHT, EspType.BME, EspType.DS18B20, EspType.SHT21 -> buildList {
                 add(Metric("$p:temp", c.name, c.temp?.let { "${f1(it)} °C" } ?: "—"))
                 if (c.type != EspType.DS18B20 && (c.hum != null || c.type != EspType.BME))
-                    add(Metric("$p:hum", "${c.name}: вологість", c.hum?.let { "${it.toInt()} %" } ?: "—"))
-                if (c.type == EspType.BME) add(Metric("$p:pres", "${c.name}: тиск", c.pres?.let { "${(it * 0.750062).toInt()} мм" } ?: "—"))
+                    add(Metric("$p:hum", "${c.name}: вологість", c.hum?.let { "${it.toInt()} %" } ?: "—", "💧"))
+                if (c.type == EspType.BME) add(Metric("$p:pres", "${c.name}: тиск", c.pres?.let { "${(it * 0.750062).toInt()} мм" } ?: "—", ""))
             }
             EspType.ANALOG -> listOf(Metric("$p:pct", c.name, c.pct?.let { "$it %" } ?: "—"))
             EspType.INPUT -> listOf(Metric("$p:active", c.name, when (c.active) { true -> "Активно"; false -> "Спокій"; null -> "—" }))

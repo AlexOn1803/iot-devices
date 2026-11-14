@@ -47,12 +47,26 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:ellipsize="end"
-            android:maxLines="2"
-            android:lineSpacingMultiplier="0.9"
+            android:maxLines="1"
             android:text=""
             android:textColor="@color/widget_sub"
             android:textSize="11sp" />
     </LinearLayout>
+
+    <!-- додаткові значення: до трьох коротких рядків праворуч -->
+    <TextView
+        android:id="@+id/w_extra"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:gravity="end"
+        android:maxWidth="150dp"
+        android:maxLines="3"
+        android:ellipsize="end"
+        android:lineSpacingMultiplier="0.95"
+        android:textColor="@color/widget_text"
+        android:textSize="12sp"
+        android:visibility="gone" />
 
     <ImageView
         android:id="@+id/w_refresh"

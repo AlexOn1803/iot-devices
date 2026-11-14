@@ -130,7 +130,7 @@ abstract class BaseWidget : AppWidgetProvider() {
                     // без кнопки значення — головне, робимо його більшим
                     views.setTextViewTextSize(R.id.w_value, TypedValue.COMPLEX_UNIT_SP, if (hasToggle) 13f else 20f)
                 }
-                WidgetSize.MEDIUM -> fillMedium(views, metrics, status, on?.let { if (it) "Увімк." else "Вимк." })
+                WidgetSize.MEDIUM -> fillMedium(views, dev.name, metrics, status, on?.let { if (it) "Увімк." else "Вимк." })
                 WidgetSize.LARGE -> fillLarge(views, metrics, status)
             }
 
@@ -140,15 +140,16 @@ abstract class BaseWidget : AppWidgetProvider() {
             mgr.updateAppWidget(id, views)
         }
 
-        /** 3×1: головне значення великим, решта (до трьох) — рядками під ним. */
-        private fun fillMedium(views: RemoteViews, metrics: List<Metric>, status: String, fallback: String?) {
+        /** 3×1: головне значення великим зліва, решта (до трьох) — короткими рядками праворуч. */
+        private fun fillMedium(views: RemoteViews, name: String, metrics: List<Metric>, status: String, fallback: String?) {
             val main = metrics.getOrNull(0)
+            views.setTextViewText(R.id.w_name, if (main != null && metrics.size > 1) "$name · ${main.label}" else name)
             views.setTextViewText(R.id.w_value, main?.value ?: fallback ?: "—")
-            val rest = metrics.drop(1).map { "${it.label}: ${it.value}" }
-            views.setTextViewText(
-                R.id.w_status,
-                (rest + listOfNotNull(status.ifEmpty { null })).joinToString(" · ").ifEmpty { main?.label ?: "" },
-            )
+            views.setTextViewText(R.id.w_status, status.ifEmpty { if (metrics.size <= 1) main?.label ?: "" else "" })
+            views.setViewVisibility(R.id.w_status, if (status.isNotEmpty() || metrics.size <= 1) View.VISIBLE else View.GONE)
+            val rest = metrics.drop(1)
+            views.setViewVisibility(R.id.w_extra, if (rest.isEmpty()) View.GONE else View.VISIBLE)
+            views.setTextViewText(R.id.w_extra, rest.joinToString("\n") { it.compact })
         }
 
         private val TILES = listOf(
@@ -191,7 +192,7 @@ abstract class BaseWidget : AppWidgetProvider() {
                     views.setTextViewText(R.id.w_value, if (busy) "…" else metrics.firstOrNull()?.value ?: "—")
                     views.setTextViewTextSize(R.id.w_value, TypedValue.COMPLEX_UNIT_SP, 20f)
                 }
-                WidgetSize.MEDIUM -> fillMedium(views, metrics, status, null)
+                WidgetSize.MEDIUM -> fillMedium(views, d.alias, metrics, status, null)
                 WidgetSize.LARGE -> fillLarge(views, metrics, status)
             }
             if (size != WidgetSize.SMALL) views.setOnClickPendingIntent(R.id.w_refresh, action(ctx, ACTION_REFRESH, w.deviceKey, id))
