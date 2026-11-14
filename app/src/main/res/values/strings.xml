@@ -1,9 +1,9 @@
 <resources>
     <string name="app_name">IoT Devices</string>
     <string name="widget_name">IoT · смужка</string>
-    <string name="widget_desc">Кнопка і два значення: потужність, температура…</string>
+    <string name="widget_desc">Кнопка і до чотирьох значень: потужність, температура, інвертор…</string>
     <string name="widget_small_name">IoT · кнопка</string>
     <string name="widget_small_desc">Кнопка 1×1 з одним значенням</string>
     <string name="widget_large_name">IoT · панель</string>
-    <string name="widget_large_desc">Кнопка і до чотирьох значень</string>
+    <string name="widget_large_desc">Кнопка і до шести значень плитками</string>
 </resources>

@@ -1,5 +1,7 @@
 package ua.madeisy.iot
 
+import ua.madeisy.iot.widget.WidgetData
+
 import android.app.Application
 import android.content.Intent
 import android.os.Bundle
@@ -121,7 +123,9 @@ private fun AppRoot(openDevice: String?, consumed: () -> Unit) {
     }
     LaunchedEffect(openDevice) {
         val key = openDevice ?: return@LaunchedEffect
-        if (IotApp.instance.storage.device(key) != null) {
+        if (key.startsWith(WidgetData.INV_PREFIX)) {
+            stack.clear(); stack.add(Screen.Home); stack.add(Screen.Inverter(key.removePrefix(WidgetData.INV_PREFIX)))
+        } else if (IotApp.instance.storage.device(key) != null) {
             stack.clear(); stack.add(Screen.Home); stack.add(Screen.Device(key))
         }
         consumed()

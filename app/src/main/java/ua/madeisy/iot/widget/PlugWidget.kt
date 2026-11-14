@@ -82,11 +82,16 @@ abstract class BaseWidget : AppWidgetProvider() {
 
         private fun render(ctx: Context, mgr: AppWidgetManager, id: Int, size: WidgetSize, busy: Boolean = false) {
             val views = RemoteViews(ctx.packageName, layoutFor(size))
+            val wcfg = WidgetData.load(ctx, id)
+            if (wcfg != null && WidgetData.isInverter(wcfg.deviceKey) && WidgetData.inverterDevice(wcfg.deviceKey) != null) {
+                renderInverter(ctx, mgr, views, id, size, wcfg, busy)
+                return
+            }
             val pair = deviceFor(ctx, id)
             if (pair == null) {
                 views.setTextViewText(R.id.w_name, "Не налаштовано")
                 // у кожного розміру свій набір полів — чіпати можна лише наявні
-                if (size == WidgetSize.LARGE) views.setViewVisibility(R.id.w_row2, View.GONE)
+                if (size == WidgetSize.LARGE) { views.setViewVisibility(R.id.w_row2, View.GONE); views.setViewVisibility(R.id.w_row3, View.GONE) }
                 else views.setTextViewText(R.id.w_value, "—")
                 if (size != WidgetSize.SMALL) views.setTextViewText(R.id.w_status, "Натисни, щоб вибрати пристрій")
                 views.setViewVisibility(R.id.w_toggle, View.GONE)
@@ -125,36 +130,72 @@ abstract class BaseWidget : AppWidgetProvider() {
                     // без кнопки значення — головне, робимо його більшим
                     views.setTextViewTextSize(R.id.w_value, TypedValue.COMPLEX_UNIT_SP, if (hasToggle) 13f else 20f)
                 }
-                WidgetSize.MEDIUM -> {
-                    val main = metrics.getOrNull(0)
-                    val sub = metrics.getOrNull(1)
-                    views.setTextViewText(R.id.w_value, main?.value ?: if (on != null) (if (on) "Увімк." else "Вимк.") else "—")
-                    views.setTextViewText(
-                        R.id.w_status,
-                        listOfNotNull(sub?.let { "${it.label}: ${it.value}" }, status.ifEmpty { null }).joinToString(" · ")
-                            .ifEmpty { main?.label ?: "" }
-                    )
-                }
-                WidgetSize.LARGE -> {
-                    views.setTextViewText(R.id.w_status, status)
-                    val tiles = listOf(
-                        Triple(R.id.w_t0, R.id.w_l0, R.id.w_v0), Triple(R.id.w_t1, R.id.w_l1, R.id.w_v1),
-                        Triple(R.id.w_t2, R.id.w_l2, R.id.w_v2), Triple(R.id.w_t3, R.id.w_l3, R.id.w_v3),
-                    )
-                    tiles.forEachIndexed { i, (tile, label, value) ->
-                        val m = metrics.getOrNull(i)
-                        // порожні клітинки ховаємо як INVISIBLE, щоб сітка не «їхала»
-                        views.setViewVisibility(tile, if (m != null) View.VISIBLE else if (i < 2 || metrics.size > 2) View.INVISIBLE else View.GONE)
-                        views.setTextViewText(label, m?.label ?: "")
-                        views.setTextViewText(value, m?.value ?: "")
-                    }
-                    views.setViewVisibility(R.id.w_row2, if (metrics.size > 2) View.VISIBLE else View.GONE)
-                }
+                WidgetSize.MEDIUM -> fillMedium(views, metrics, status, on?.let { if (it) "Увімк." else "Вимк." })
+                WidgetSize.LARGE -> fillLarge(views, metrics, status)
             }
 
             views.setOnClickPendingIntent(R.id.w_toggle, action(ctx, ACTION_TOGGLE, dev.key, id))
             if (size != WidgetSize.SMALL) views.setOnClickPendingIntent(R.id.w_refresh, action(ctx, ACTION_REFRESH, dev.key, id))
             views.setOnClickPendingIntent(R.id.w_root, openApp(ctx, dev.key))
+            mgr.updateAppWidget(id, views)
+        }
+
+        /** 3×1: головне значення великим, решта (до трьох) — рядками під ним. */
+        private fun fillMedium(views: RemoteViews, metrics: List<Metric>, status: String, fallback: String?) {
+            val main = metrics.getOrNull(0)
+            views.setTextViewText(R.id.w_value, main?.value ?: fallback ?: "—")
+            val rest = metrics.drop(1).map { "${it.label}: ${it.value}" }
+            views.setTextViewText(
+                R.id.w_status,
+                (rest + listOfNotNull(status.ifEmpty { null })).joinToString(" · ").ifEmpty { main?.label ?: "" },
+            )
+        }
+
+        private val TILES = listOf(
+            Triple(R.id.w_t0, R.id.w_l0, R.id.w_v0), Triple(R.id.w_t1, R.id.w_l1, R.id.w_v1),
+            Triple(R.id.w_t2, R.id.w_l2, R.id.w_v2), Triple(R.id.w_t3, R.id.w_l3, R.id.w_v3),
+            Triple(R.id.w_t4, R.id.w_l4, R.id.w_v4), Triple(R.id.w_t5, R.id.w_l5, R.id.w_v5),
+        )
+
+        /** 3×2: до шести плиток по дві в рядку. */
+        private fun fillLarge(views: RemoteViews, metrics: List<Metric>, status: String) {
+            views.setTextViewText(R.id.w_status, status)
+            TILES.forEachIndexed { i, (tile, label, value) ->
+                val m = metrics.getOrNull(i)
+                // порожня клітинка в заповненому рядку — INVISIBLE, щоб сітка не «їхала»
+                views.setViewVisibility(tile, if (m != null) View.VISIBLE else View.INVISIBLE)
+                views.setTextViewText(label, m?.label ?: "")
+                views.setTextViewText(value, m?.value ?: "")
+            }
+            views.setViewVisibility(R.id.w_row2, if (metrics.size > 2) View.VISIBLE else View.GONE)
+            views.setViewVisibility(R.id.w_row3, if (metrics.size > 4) View.VISIBLE else View.GONE)
+            // що більше рядків — то дрібніший шрифт, щоб усе влізло у 2 клітинки висоти
+            val sp = when { metrics.size > 4 -> 15f; metrics.size > 2 -> 17f; else -> 19f }
+            TILES.forEach { (_, _, v) -> views.setTextViewTextSize(v, TypedValue.COMPLEX_UNIT_SP, sp) }
+        }
+
+        private fun renderInverter(ctx: Context, mgr: AppWidgetManager, views: RemoteViews, id: Int, size: WidgetSize, w: WidgetCfg, busy: Boolean) {
+            val d = WidgetData.inverterDevice(w.deviceKey) ?: return
+            val st = IotApp.instance.inverters.stateOf(d.sn)
+            val metrics = WidgetData.inverterSelected(w.deviceKey, w, size)
+            val status = when {
+                busy -> "Зачекай…"
+                st.updatedAt == 0L -> "Натисни ⟳"
+                System.currentTimeMillis() - st.updatedAt > 10 * 60_000 -> "о ${android.text.format.DateFormat.format("HH:mm", st.updatedAt)}"
+                else -> ""
+            }
+            views.setTextViewText(R.id.w_name, d.alias)
+            views.setViewVisibility(R.id.w_toggle, View.GONE)
+            when (size) {
+                WidgetSize.SMALL -> {
+                    views.setTextViewText(R.id.w_value, if (busy) "…" else metrics.firstOrNull()?.value ?: "—")
+                    views.setTextViewTextSize(R.id.w_value, TypedValue.COMPLEX_UNIT_SP, 20f)
+                }
+                WidgetSize.MEDIUM -> fillMedium(views, metrics, status, null)
+                WidgetSize.LARGE -> fillLarge(views, metrics, status)
+            }
+            if (size != WidgetSize.SMALL) views.setOnClickPendingIntent(R.id.w_refresh, action(ctx, ACTION_REFRESH, w.deviceKey, id))
+            views.setOnClickPendingIntent(R.id.w_root, openApp(ctx, w.deviceKey))
             mgr.updateAppWidget(id, views)
         }
 
@@ -224,17 +265,26 @@ abstract class BaseWidget : AppWidgetProvider() {
         )
 
         private fun usedKeys(ctx: Context): List<String> =
-            allWidgets(ctx).mapNotNull { (id, _) -> deviceFor(ctx, id)?.first?.key }.distinct()
+            allWidgets(ctx).mapNotNull { (id, _) -> WidgetData.load(ctx, id)?.deviceKey }.distinct()
+
+        /** Оновити ключ пристрою: інвертор — через хмару SmartESS, решта — як завжди. */
+        private suspend fun refreshKey(key: String, force: Boolean) {
+            if (WidgetData.isInverter(key)) {
+                val d = WidgetData.inverterDevice(key) ?: return
+                val repo = IotApp.instance.inverters
+                if (force || System.currentTimeMillis() - repo.stateOf(d.sn).updatedAt > 60_000) runCatching { repo.refresh(d) }
+                return
+            }
+            val c = IotApp.instance.controller
+            val dev = IotApp.instance.storage.device(key) ?: return
+            if (force || System.currentTimeMillis() - c.summary(dev).updatedAt > 60_000) runCatching { c.refreshOnce(key) }
+        }
 
         /** Оновити дані пристроїв, якщо застаріли, і перемалювати віджети. */
         private fun refreshStale(ctx: Context, keys: List<String>, then: () -> Unit) {
             CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                 try {
-                    val c = IotApp.instance.controller
-                    keys.forEach { k ->
-                        val dev = IotApp.instance.storage.device(k) ?: return@forEach
-                        if (System.currentTimeMillis() - c.summary(dev).updatedAt > 60_000) runCatching { c.refreshOnce(k) }
-                    }
+                    keys.forEach { k -> refreshKey(k, force = false) }
                 } finally {
                     withContext(Dispatchers.Main) { updateAll(ctx) }
                     then()
@@ -250,7 +300,7 @@ abstract class BaseWidget : AppWidgetProvider() {
     override fun onUpdate(context: Context, mgr: AppWidgetManager, ids: IntArray) {
         schedulePeriodic(context)
         ids.forEach { render(context, mgr, it, size) }
-        val keys = ids.toList().mapNotNull { deviceFor(context, it)?.first?.key }.distinct()
+        val keys = ids.toList().mapNotNull { WidgetData.load(context, it)?.deviceKey }.distinct()
         if (keys.isEmpty()) return
         val pending = goAsync()
         refreshStale(context, keys) { pending.finish() }
@@ -286,7 +336,9 @@ abstract class BaseWidget : AppWidgetProvider() {
                         val c = IotApp.instance.controller
                         val dev = IotApp.instance.storage.device(key)
                         val w = if (widgetId != -1) WidgetData.load(context, widgetId) else null
-                        if (action == ACTION_REFRESH || dev == null) {
+                        if (WidgetData.isInverter(key)) {
+                            refreshKey(key, force = true)
+                        } else if (action == ACTION_REFRESH || dev == null) {
                             c.refreshOnce(key)
                         } else if (!dev.isEsp || w == null || w.toggle == WidgetCfg.AUTO) {
                             c.toggle(key)
@@ -318,7 +370,7 @@ class SmallWidget : BaseWidget() {
     override val size = WidgetSize.SMALL
 }
 
-/** 3×2 — до чотирьох значень і кнопка. */
+/** 3×2 — до шести значень і кнопка. */
 class LargeWidget : BaseWidget() {
     override val size = WidgetSize.LARGE
 }

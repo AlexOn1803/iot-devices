@@ -15,7 +15,13 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 enum class WidgetSize(val maxMetrics: Int, val label: String) {
-    SMALL(1, "Кнопка 1×1"), MEDIUM(2, "Смужка 3×1"), LARGE(4, "Панель 3×2")
+    SMALL(1, "Кнопка 1×1"), MEDIUM(4, "Смужка 3×1"), LARGE(6, "Панель 3×2");
+
+    val hint: String get() = when (this) {
+        SMALL -> "Кнопка й одне значення"
+        MEDIUM -> "Кнопка, головне значення й ще до трьох під ним"
+        LARGE -> "Кнопка й до шести значень плитками"
+    }
 }
 
 /**
@@ -52,6 +58,51 @@ data class Metric(val id: String, val label: String, val value: String)
 
 /** Які дані пристрою можна показати на віджеті, і їхні поточні значення. */
 object WidgetData {
+    /** Ключ віджета для інвертора SmartESS: "inv:<серійний номер>". */
+    const val INV_PREFIX = "inv:"
+
+    fun isInverter(key: String) = key.startsWith(INV_PREFIX)
+
+    fun inverterDevice(key: String): ua.madeisy.iot.inverter.EssDevice? =
+        IotApp.instance.inverters.devices.value.firstOrNull { INV_PREFIX + it.sn == key }
+
+    private fun kw(v: Double?): String = when {
+        v == null -> "—"
+        kotlin.math.abs(v) >= 1000 -> String.format(Locale.US, "%.2f кВт", v / 1000)
+        else -> "${v.toInt()} Вт"
+    }
+
+    /** Метрики інвертора: зведені + кожне поле з хмари окремо. */
+    fun inverterMetrics(key: String): List<Metric> {
+        val d = inverterDevice(key) ?: return emptyList()
+        val st = IotApp.instance.inverters.stateOf(d.sn)
+        val s = st.summary
+        val out = mutableListOf(
+            Metric("pv", "Сонце", kw(s.pvW)),
+            Metric("soc", "Батарея", s.socPct?.let { "${it.toInt()} %" } ?: "—"),
+            Metric("load", "Навантаження", kw(s.loadW)),
+            Metric("grid", "Мережа", when (s.gridPresent) { true -> s.gridV?.let { "${it.toInt()} В" } ?: "є"; false -> "немає"; null -> "—" }),
+            Metric("batt", "Заряд/розряд", s.batteryW?.let { if (it >= 0) "+" + kw(it) else "−" + kw(-it) } ?: "—"),
+            Metric("bv", "Напруга батареї", s.batteryV?.let { String.format(Locale.US, "%.1f В", it) } ?: "—"),
+            Metric("mode", "Режим", s.mode?.let { ua.madeisy.iot.inverter.EssSummary.modeUa(it) } ?: "—"),
+        )
+        st.points.forEach { p ->
+            out += Metric("pt:" + p.title, ua.madeisy.iot.inverter.EssSummary.titleUa(p.title),
+                p.value + if (p.unit.isNotBlank()) " ${p.unit}" else "")
+        }
+        return out
+    }
+
+    fun inverterSelected(key: String, w: WidgetCfg, size: WidgetSize): List<Metric> {
+        val all = inverterMetrics(key)
+        val chosen = if (w.metrics.isNotEmpty()) w.metrics.mapNotNull { id -> all.firstOrNull { it.id == id } }
+        else inverterDefaults(all)
+        return chosen.take(size.maxMetrics)
+    }
+
+    fun inverterDefaults(all: List<Metric>): List<Metric> =
+        listOf("soc", "pv", "load", "grid", "batt", "mode").mapNotNull { id -> all.firstOrNull { it.id == id } }
+
     private val todayCache = ConcurrentHashMap<String, Pair<Double, Long>>()
 
     private fun f1(v: Double) = String.format(Locale.US, "%.1f", v)

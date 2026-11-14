@@ -76,17 +76,24 @@ class WidgetConfigActivity : ComponentActivity() {
 private fun ConfigScreen(size: WidgetSize, existing: WidgetCfg?, onSave: (WidgetCfg) -> Unit) {
     val app = IotApp.instance
     val devices by app.storage.devices.collectAsState()
-    var deviceKey by remember { mutableStateOf(existing?.deviceKey ?: devices.firstOrNull()?.key) }
+    val inverters by app.inverters.devices.collectAsState()
+    var deviceKey by remember {
+        mutableStateOf(existing?.deviceKey ?: devices.firstOrNull()?.key ?: inverters.firstOrNull()?.let { WidgetData.INV_PREFIX + it.sn })
+    }
     var toggle by remember { mutableStateOf(existing?.toggle ?: WidgetCfg.AUTO) }
     val metrics = remember { mutableStateListOf<String>().apply { existing?.metrics?.let { addAll(it) } } }
     val device = devices.firstOrNull { it.key == deviceKey }
+    val inverter = inverters.firstOrNull { WidgetData.INV_PREFIX + it.sn == deviceKey }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Віджет · ${size.label}") }) },
         bottomBar = {
             Button(
-                enabled = device != null,
-                onClick = { device?.let { onSave(WidgetCfg(it.key, toggle, metrics.toList())) } },
+                enabled = device != null || inverter != null,
+                onClick = {
+                    if (device != null) onSave(WidgetCfg(device.key, toggle, metrics.toList()))
+                    else if (inverter != null) onSave(WidgetCfg(WidgetData.INV_PREFIX + inverter.sn, WidgetCfg.NONE, metrics.toList()))
+                },
                 modifier = Modifier.fillMaxWidth().padding(16.dp).padding(bottom = 16.dp),
             ) { Text("Додати віджет") }
         },
@@ -95,8 +102,8 @@ private fun ConfigScreen(size: WidgetSize, existing: WidgetCfg?, onSave: (Widget
             Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            if (devices.isEmpty()) {
-                Text("Спершу додай розетку чи плату в самому додатку.", style = MaterialTheme.typography.bodyLarge)
+            if (devices.isEmpty() && inverters.isEmpty()) {
+                Text("Спершу додай розетку, плату чи інвертор у самому додатку.", style = MaterialTheme.typography.bodyLarge)
                 return@Column
             }
             Text("Пристрій", style = MaterialTheme.typography.titleMedium)
@@ -115,8 +122,24 @@ private fun ConfigScreen(size: WidgetSize, existing: WidgetCfg?, onSave: (Widget
                     }
                 }
             }
+            inverters.forEach { d ->
+                val k = WidgetData.INV_PREFIX + d.sn
+                Row(
+                    Modifier.fillMaxWidth().clickable { if (deviceKey != k) { deviceKey = k; metrics.clear() } },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = deviceKey == k, onClick = null, modifier = Modifier.padding(12.dp))
+                    Column {
+                        Text(d.alias, style = MaterialTheme.typography.bodyLarge)
+                        Text("Інвертор SmartESS", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
             if (device != null) {
                 key(device.key) { DeviceOptions(device, size, toggle, { toggle = it }, metrics) }
+            } else if (inverter != null) {
+                key(inverter.sn) { InverterOptions(WidgetData.INV_PREFIX + inverter.sn, size, metrics) }
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -153,11 +176,7 @@ fun PinWidgetDialog(device: DeviceConfig, onDismiss: () -> Unit) {
                         Column {
                             Text(s.label)
                             Text(
-                                when (s) {
-                                    WidgetSize.SMALL -> "Кнопка й одне значення"
-                                    WidgetSize.MEDIUM -> "Кнопка, головне й друге значення"
-                                    WidgetSize.LARGE -> "Кнопка й до чотирьох значень"
-                                },
+                                s.hint,
                                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
@@ -210,10 +229,6 @@ private fun DeviceOptions(
     option(WidgetCfg.NONE, "Без кнопки — лише дані")
 
     HorizontalDivider(Modifier.padding(vertical = 8.dp))
-    Text(
-        "Дані — до ${size.maxMetrics}" + if (size.maxMetrics > 1) " (у порядку вибору)" else "",
-        style = MaterialTheme.typography.titleMedium,
-    )
     if (device.isEsp && espState.comps.isEmpty()) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
             if (espState.online || espState.connecting) {
@@ -228,9 +243,19 @@ private fun DeviceOptions(
             }
         }
     }
+    MetricPicker(available, WidgetData.defaults(device, available), size, metrics)
+}
+
+/** Вибір даних для віджета (спільний для всіх типів пристроїв). */
+@Composable
+private fun MetricPicker(available: List<Metric>, defaults: List<Metric>, size: WidgetSize, metrics: MutableList<String>) {
+    Text(
+        "Дані — до ${size.maxMetrics}" + if (size.maxMetrics > 1) " (у порядку вибору)" else "",
+        style = MaterialTheme.typography.titleMedium,
+    )
     if (metrics.isEmpty() && available.isNotEmpty()) {
         Text(
-            "Нічого не вибрано — покажу типові: " + WidgetData.defaults(device, available).take(size.maxMetrics).joinToString { it.label },
+            "Нічого не вибрано — покажу типові: " + defaults.take(size.maxMetrics).joinToString { it.label },
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -256,4 +281,64 @@ private fun DeviceOptions(
                 color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(end = 8.dp))
         }
     }
+}
+
+@Composable
+private fun InverterOptions(key: String, size: WidgetSize, metrics: MutableList<String>) {
+    ua.madeisy.iot.ui.KeepInverters()
+    IotApp.instance.inverters.states.collectAsState().value   // щоб список оновився, щойно прийдуть дані
+    val available = WidgetData.inverterMetrics(key)
+    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+    if (available.size <= 7) Text(
+        "Поля інвертора з'являться, щойно прийдуть дані з SmartESS.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    MetricPicker(available, WidgetData.inverterDefaults(available), size, metrics)
+}
+
+/** Діалог «Віджет на головний екран» з екрана інвертора. */
+@Composable
+fun PinInverterWidgetDialog(sn: String, onDismiss: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val key = WidgetData.INV_PREFIX + sn
+    var size by remember { mutableStateOf(WidgetSize.LARGE) }
+    val metrics = remember { mutableStateListOf<String>() }
+    val canPin = remember { BaseWidget.canPin(ctx) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Віджет інвертора") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (!canPin) {
+                    Text(
+                        "Твій лаунчер не дозволяє додавати віджети з додатку. Утримуй порожнє місце на головному екрані → Віджети → IoT Devices.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    Text("Розмір", style = MaterialTheme.typography.titleMedium)
+                    WidgetSize.entries.forEach { s ->
+                        Row(Modifier.fillMaxWidth().clickable {
+                            size = s
+                            while (metrics.size > s.maxMetrics) metrics.removeAt(metrics.lastIndex)
+                        }, verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = size == s, onClick = null, modifier = Modifier.padding(10.dp))
+                            Column {
+                                Text(s.label)
+                                Text(s.hint.replace("Кнопка й ", "").replace("Кнопка, ", ""),
+                                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                    InverterOptions(key, size, metrics)
+                }
+            }
+        },
+        confirmButton = {
+            if (canPin) androidx.compose.material3.TextButton(onClick = {
+                BaseWidget.requestPin(ctx, size, WidgetCfg(key, WidgetCfg.NONE, metrics.toList()))
+                onDismiss()
+            }) { Text("Додати") }
+        },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text(if (canPin) "Скасувати" else "Зрозуміло") } },
+    )
 }

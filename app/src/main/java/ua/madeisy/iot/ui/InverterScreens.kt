@@ -13,6 +13,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -189,6 +190,7 @@ fun InverterScreen(sn: String, nav: Nav) {
     val s = states[sn] ?: InverterState()
     val scope = rememberCoroutineScope()
     var rename by remember { mutableStateOf(false) }
+    var pinWidget by remember { mutableStateOf(false) }
     KeepInverters()
 
     Scaffold(
@@ -199,6 +201,7 @@ fun InverterScreen(sn: String, nav: Nav) {
                 actions = {
                     if (d != null) {
                         IconButton(onClick = { scope.launch { repo.refresh(d) } }) { Icon(Icons.Filled.Refresh, "Оновити") }
+                        IconButton(onClick = { pinWidget = true }) { Icon(Icons.Filled.Widgets, "Віджет на головний екран") }
                         IconButton(onClick = { rename = true }) { Icon(Icons.Filled.Edit, "Перейменувати") }
                     }
                 },
@@ -259,6 +262,7 @@ fun InverterScreen(sn: String, nav: Nav) {
         }
         }
     }
+    if (pinWidget) ua.madeisy.iot.widget.PinInverterWidgetDialog(sn) { pinWidget = false }
     if (rename && d != null) {
         var name by remember { mutableStateOf(d.alias) }
         AlertDialog(
