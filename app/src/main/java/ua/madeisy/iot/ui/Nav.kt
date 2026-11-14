@@ -10,6 +10,7 @@ sealed interface Screen {
     data object AddEsp : Screen
     data object Thermostats : Screen
     data object Flash : Screen
+    data class Inverter(val sn: String) : Screen
 }
 
 interface Nav {

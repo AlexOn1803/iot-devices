@@ -46,6 +46,7 @@ class IotApp : Application() {
     lateinit var history: HistoryDb
     lateinit var controller: PlugController
     lateinit var thermostats: ThermostatEngine
+    lateinit var inverters: ua.madeisy.iot.inverter.InverterRepo
 
     override fun onCreate() {
         super.onCreate()
@@ -53,6 +54,7 @@ class IotApp : Application() {
         storage = Storage(this)
         history = HistoryDb(this)
         controller = PlugController(this, storage, history)
+        inverters = ua.madeisy.iot.inverter.InverterRepo(this)
         thermostats = ThermostatEngine(this, storage, controller).also { it.start() }
         Notifications.createChannels(this)
         ScheduleManager.rescheduleAll(this)
@@ -145,6 +147,7 @@ private fun AppRoot(openDevice: String?, consumed: () -> Unit) {
             Screen.Settings -> SettingsScreen(nav)
             Screen.Help -> HelpScreen(nav)
             Screen.MqttHelp -> MqttHelpScreen(nav)
+            is Screen.Inverter -> ua.madeisy.iot.ui.InverterScreen(screen.sn, nav)
         }
     }
 }

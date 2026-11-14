@@ -63,6 +63,8 @@ fun HomeScreen(nav: Nav) {
     val devices by app.storage.devices.collectAsState()
     val states by app.controller.states.collectAsState()
     val espStates by app.controller.espStates.collectAsState()
+    val inverters by app.inverters.devices.collectAsState()
+    val invStates by app.inverters.states.collectAsState()
     var addChooser by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -88,13 +90,17 @@ fun HomeScreen(nav: Nav) {
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
-        if (devices.isEmpty()) {
+        if (inverters.isNotEmpty()) KeepInverters()
+        if (devices.isEmpty() && inverters.isEmpty()) {
             EmptyState(Modifier.padding(pad), nav)
         } else {
             LazyColumn(
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = pad.calculateTopPadding() + 8.dp, bottom = pad.calculateBottomPadding() + 88.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                items(inverters, key = { "inv-" + it.sn }) { d ->
+                    InverterCard(d, invStates[d.sn] ?: ua.madeisy.iot.inverter.InverterState()) { nav.push(Screen.Inverter(d.sn)) }
+                }
                 items(devices, key = { it.key }) { d ->
                     KeepConnected(d.key)
                     if (d.isEsp) EspCard(
@@ -141,6 +147,11 @@ private fun AddChooser(nav: Nav, onDismiss: () -> Unit) {
                     headlineContent = { Text("Плата ESP (вже прошита)") },
                     supportingContent = { Text("ESP8266 / ESP32 / S2 / S3 / C3 з прошивкою IoT Devices") },
                     modifier = Modifier.clickable { onDismiss(); nav.push(Screen.AddEsp) },
+                )
+                ListItem(
+                    headlineContent = { Text("Інвертор (SmartESS)") },
+                    supportingContent = { Text("Дані інвертора з акаунта SmartESS") },
+                    modifier = Modifier.clickable { onDismiss(); nav.push(Screen.Settings) },
                 )
                 ListItem(
                     headlineContent = { Text("Прошити нову плату через USB") },

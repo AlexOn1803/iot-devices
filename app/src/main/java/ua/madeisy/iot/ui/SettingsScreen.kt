@@ -173,6 +173,8 @@ fun SettingsScreen(nav: Nav) {
 
             MqttCard(snackbar, nav)
 
+            SmartEssCard(snackbar)
+
             SectionCard("Загальне") {
                 OutlinedTextField(
                     tariffText,
