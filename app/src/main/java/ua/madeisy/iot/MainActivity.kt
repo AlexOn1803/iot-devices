@@ -70,7 +70,7 @@ class IotApp : Application() {
         runCatching {
             cm.registerDefaultNetworkCallback(object : android.net.ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: android.net.Network) {
-                    if (last != null && last != network) controller.mqtt.reconnectNow()
+                    if (last != null && last != network) { controller.mqtt.reconnectNow(); controller.hub.reconnectNow() }
                     last = network
                 }
             })

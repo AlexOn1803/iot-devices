@@ -90,6 +90,7 @@ class InverterRepo(context: Context) {
         _account.value = a
         _devices.value = found
         _states.value = emptyMap()
+        runCatching { ua.madeisy.iot.IotApp.instance.controller.syncHub() }
         if (watchers > 0) startPolling()
         refreshAll()
         return found.size
@@ -118,11 +119,13 @@ class InverterRepo(context: Context) {
         _devices.value = emptyList()
         _states.value = emptyMap()
         poller?.cancel(); poller = null
+        runCatching { ua.madeisy.iot.IotApp.instance.controller.syncHub() }
     }
 
     private fun saveDevices(list: List<EssDevice>) {
         prefs.edit().putString("devices", JSONArray().apply { list.forEach { put(it.toJson()) } }.toString()).apply()
         _devices.value = list
+        runCatching { ua.madeisy.iot.IotApp.instance.controller.syncHub() }
     }
 
     private fun update(sn: String, f: (InverterState) -> InverterState) {
@@ -131,9 +134,29 @@ class InverterRepo(context: Context) {
         _states.value = m
     }
 
+    /** Налаштування для хаба Raspberry Pi (він опитує SmartESS сам, телефону не треба). */
+    fun hubConfig(): org.json.JSONObject? {
+        val a = _account.value
+        if (!a.configured) return null
+        return org.json.JSONObject().put("server", a.server.name).put("user", a.user).put("pwdSha1", a.pwdSha1)
+            .put("companyKey", a.companyKey).put("devices", JSONArray().apply { _devices.value.forEach { put(it.toJson()) } })
+    }
+
+    /** Дані інвертора від хаба. */
+    fun applyHub(sn: String, st: org.json.JSONObject) {
+        if (_devices.value.none { it.sn == sn }) return
+        if (st.optBoolean("online")) {
+            val pts = SmartEssClient.parsePoints(st.optJSONArray("points"))
+            update(sn) { InverterState(pts, EssSummary.of(pts), st.optLong("at", System.currentTimeMillis())) }
+        } else update(sn) { it.copy(loading = false, error = st.optString("error").ifBlank { "Хаб не отримав дані" }) }
+    }
+
+    private fun hubManages(sn: String) = runCatching { ua.madeisy.iot.IotApp.instance.controller.hub.manages("inv:$sn") }.getOrDefault(false)
+
     suspend fun refresh(d: EssDevice) {
         val a = _account.value
         if (!a.configured) return
+        if (hubManages(d.sn)) return   // дані надсилає хаб
         update(d.sn) { it.copy(loading = true) }
         try {
             val pts = clientFor(a).lastData(d)

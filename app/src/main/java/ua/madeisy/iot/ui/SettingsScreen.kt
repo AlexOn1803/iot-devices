@@ -171,6 +171,8 @@ fun SettingsScreen(nav: Nav) {
                 }
             }
 
+            HubCard(snackbar)
+
             MqttCard(snackbar, nav)
 
             SmartEssCard(snackbar)

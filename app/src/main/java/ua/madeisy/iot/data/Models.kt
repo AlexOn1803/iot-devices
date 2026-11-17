@@ -127,7 +127,7 @@ data class DeviceConfig(
     }
 }
 
-enum class Source { NONE, LOCAL, CLOUD }
+enum class Source { NONE, LOCAL, CLOUD, HUB }
 
 data class PlugState(
     val source: Source = Source.NONE,

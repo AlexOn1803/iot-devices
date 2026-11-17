@@ -176,6 +176,7 @@ private fun EspStatusLine(cfg: DeviceConfig, s: EspState) {
         Spacer(Modifier.width(6.dp))
         Text(
             when {
+                s.online && s.viaHub -> "Через хаб Raspberry Pi"
                 s.online && s.remote -> "Через інтернет (MQTT)" + (s.rssi?.let { " · $it dBm" } ?: "")
                 s.online -> "Напряму · ${cfg.ip}" + (s.rssi?.let { " · $it dBm" } ?: "")
                 s.connecting -> "Підключення…"

@@ -78,6 +78,8 @@ dependencies {
     implementation("com.github.mik3y:usb-serial-for-android:3.8.1")
     // MQTT — доступ до плат ESP через інтернет
     implementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
+    // WebSocket до хаба Raspberry Pi
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")

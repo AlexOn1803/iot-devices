@@ -277,6 +277,8 @@ data class EspState(
     val error: String? = null,
     /** true — дані прийшли через інтернет (MQTT), а не напряму. */
     val remote: Boolean = false,
+    /** true — дані йдуть через хаб Raspberry Pi. */
+    val viaHub: Boolean = false,
 ) {
     /** Перший компонент, яким можна керувати однією кнопкою (для віджета й розкладу). */
     val primary: EspComp? get() = comps.firstOrNull { it.type == EspType.RELAY } ?: comps.firstOrNull { it.isSwitchable }

@@ -19,6 +19,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import ua.madeisy.iot.IotApp
 import org.json.JSONObject
 import ua.madeisy.iot.esp.EspClient
 import ua.madeisy.iot.esp.EspComp
@@ -83,6 +86,10 @@ class PlugController(
     /** Доступ до плат через інтернет (MQTT-брокер). */
     val mqtt = ua.madeisy.iot.esp.EspMqtt()
 
+    /** Хаб Raspberry Pi: якщо доступний, усі пристрої йдуть через нього. */
+    val hub = ua.madeisy.iot.hub.HubClient(ctx, scope)
+    @Volatile private var lastSync: String? = null
+
     init {
         scope.launch(Dispatchers.IO) {
             runCatching { history.prune(System.currentTimeMillis() - 31L * 24 * 3600 * 1000) }
@@ -92,11 +99,80 @@ class PlugController(
             mqtt.updates.collect { id ->
                 storage.devices.value.filter { it.isEsp && it.deviceId == id }.forEach { d ->
                     val st = espState(d.key)
-                    if (synchronized(this@PlugController) { watchers.containsKey(d.key) } && (st.remote || !st.online)) applyRemote(d.key, d)
+                    if (synchronized(this@PlugController) { watchers.containsKey(d.key) } && (st.remote || !st.online) && !hub.manages(d.key)) applyRemote(d.key, d)
                 }
             }
         }
         scope.launch { storage.mqtt.collect { ensureMqtt() } }
+
+        // ---- хаб ----
+        scope.launch { hub.states.collect { (k, st) -> runCatching { applyHub(k, st) } } }
+        scope.launch { hub.connectedEvents.collect { lastSync = null; syncHub() } }
+        scope.launch { storage.devices.collect { syncHub() } }
+        scope.launch { storage.espLinks.collect { syncHub() } }
+        scope.launch {
+            // хаб з'явився/зник — перезапускаємо цикли: або віддаємо пристрої хабу, або беремо назад
+            hub.status.map { it.connected }.distinctUntilChanged().collect {
+                synchronized(this@PlugController) { watchers.keys.toList() }.forEach { k -> restart(k) }
+            }
+        }
+        hub.start()
+    }
+
+    /** Надіслати хабу пристрої (з ключами) і акаунт інвертора — лише якщо щось змінилось. */
+    fun syncHub() {
+        if (!hub.status.value.connected) return
+        val devs = JSONArray()
+        for (d in storage.devices.value) {
+            if (d.isEsp) {
+                if (d.ip.isBlank()) continue
+                devs.put(JSONObject().put("key", d.key).put("kind", "ESP").put("ip", d.ip).put("apiKey", d.apiKey).put("name", d.name))
+            } else {
+                if (!d.canLocal || d.mode == ConnectionMode.CLOUD) continue
+                devs.put(JSONObject().put("key", d.key).put("kind", "TUYA").put("deviceId", d.deviceId).put("localKey", d.localKey)
+                    .put("ip", d.ip).put("version", d.version).put("name", d.name)
+                    .put("measured", JSONArray(d.dps.measured)).put("shared", storage.isSharedWithEsp(d.key)))
+            }
+        }
+        val msg = JSONObject().put("t", "sync").put("devices", devs)
+        runCatching { IotApp.instance.inverters.hubConfig() }.getOrNull()?.let { msg.put("inverter", it) }
+        val sig = msg.toString()
+        if (sig == lastSync) return
+        scope.launch {
+            hub.request(JSONObject(sig)).onSuccess { lastSync = sig }
+        }
+    }
+
+    /** Стан пристрою від хаба. */
+    private fun applyHub(key: String, st: JSONObject) {
+        if (key.startsWith("inv:")) {
+            runCatching { IotApp.instance.inverters.applyHub(key.removePrefix("inv:"), st) }
+            return
+        }
+        val cfg = storage.device(key) ?: return
+        val online = st.optBoolean("online")
+        val err = st.optString("error").ifBlank { null }
+        if (cfg.isEsp) {
+            val j = st.optJSONObject("state")
+            if (online && j != null) {
+                applyEspState(key, j, at = st.optLong("at", System.currentTimeMillis()))
+                espUpdate(key) { it.copy(viaHub = true) }
+            } else espUpdate(key) { it.copy(online = false, connecting = false, viaHub = true, error = err ?: "Плата не відповідає хабу") }
+        } else {
+            val dps = st.optJSONObject("dps")
+            if (online && dps != null) {
+                val map = HashMap<String, Any?>()
+                dps.keys().forEach { k -> map[k] = dps.opt(k).takeIf { it != JSONObject.NULL } }
+                applyDps(key, cfg, map, Source.HUB)
+            } else update(key) { it.copy(source = Source.NONE, connecting = false, error = err ?: "Розетка не відповідає хабу") }
+        }
+    }
+
+    /** Цикл пристрою має поступитися хабу: хаб керує ним (або щойно підключився і ще надсилає стан). */
+    private fun hubOwns(key: String): Boolean {
+        val st = hub.status.value
+        if (!st.connected) return false
+        return key in hub.managed || System.currentTimeMillis() - hub.onlineSince < 4000
     }
 
     fun state(key: String): PlugState = _states.value[key] ?: PlugState()
@@ -230,6 +306,7 @@ class PlugController(
                 rssi = j.optInt("rssi").takeIf { r -> r != 0 },
                 updatedAt = at,
                 remote = remote,
+                viaHub = false,
             )
         }
     }
@@ -257,6 +334,7 @@ class PlugController(
         ensureMqtt()
         while (currentCoroutineContext().isActive) {
             val cfg = storage.device(key) ?: return
+            if (hubOwns(key)) { delay(1000); continue }
             ensureMqtt()   // якщо з'єднання з брокером обірвалось — перепідключить (не частіше ніж раз на 10 с)
             val now = System.currentTimeMillis()
             // поза домом не смикаємо локальну адресу щодві секунди — лише раз на 20 с
@@ -308,6 +386,24 @@ class PlugController(
     suspend fun espSet(key: String, vararg commands: JSONObject): Result<Unit> {
         val cfg = storage.device(key) ?: return Result.failure(IOException("Пристрій не знайдено"))
         var err: Exception? = null
+        if (hub.manages(key)) {
+            val body: Any = if (commands.size == 1) commands[0] else JSONArray(commands.toList())
+            val r = hub.request(JSONObject().put("t", "cmd").put("key", key).put("esp", body))
+            if (r.isSuccess) {
+                espUpdate(key) { st ->
+                    st.copy(comps = st.comps.map { c ->
+                        val cmd = commands.firstOrNull { it.optInt("i", -1) == c.i } ?: return@map c
+                        when {
+                            cmd.has("on") -> c.copy(on = cmd.optBoolean("on"))
+                            cmd.optBoolean("toggle") -> c.copy(on = c.on != true)
+                            else -> c
+                        }
+                    })
+                }
+                return Result.success(Unit)
+            }
+            err = r.exceptionOrNull() as? Exception
+        }
         if (!espState(key).remote && cfg.ip.isNotBlank()) {
             try {
                 applyEspState(key, espClient(cfg).set(commands.toList()))
@@ -382,6 +478,7 @@ class PlugController(
         var lastLocalTry = 0L
         while (currentCoroutineContext().isActive) {
             val cfg = storage.device(key) ?: return
+            if (hubOwns(key)) { delay(1000); continue }
             val now = System.currentTimeMillis()
             val cloudPossible = cfg.mode != ConnectionMode.LOCAL && storage.cloud.value.configured && cfg.canCloudId
             val retryLocal = localFails < 2 || !cloudPossible || now - lastLocalTry > 60_000
@@ -588,6 +685,13 @@ class PlugController(
         val strValues = values.mapKeys { it.key.toString() }
         var lastError: Exception? = null
 
+        if (hub.manages(key)) {
+            val dps = JSONObject().apply { strValues.forEach { (k, v) -> put(k, v ?: JSONObject.NULL) } }
+            val r = hub.request(JSONObject().put("t", "cmd").put("key", key).put("dps", dps))
+            if (r.isSuccess) { applyDps(key, cfg, strValues, Source.HUB); return Result.success(Unit) }
+            lastError = r.exceptionOrNull() as? Exception
+        }
+
         clients[key]?.takeIf { it.connected }?.let { c ->
             try {
                 c.set(strValues)
@@ -651,6 +755,7 @@ class PlugController(
     /** Разове оновлення стану без постійного з'єднання (для віджета). */
     suspend fun refreshOnce(key: String): Result<PlugState> {
         val cfg = storage.device(key) ?: return Result.failure(IOException("Пристрій не знайдено"))
+        if (hub.manages(key)) return Result.success(state(key))   // хаб сам надсилає зміни
         if (cfg.isEsp) {
             ensureMqtt()
             return try {

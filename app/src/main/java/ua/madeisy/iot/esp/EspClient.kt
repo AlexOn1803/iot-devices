@@ -89,7 +89,7 @@ object EspDiscovery {
     private const val TYPE = "_iotdev._tcp."
     private val executor = Executors.newSingleThreadExecutor()
 
-    suspend fun scan(ctx: Context, durationMs: Long = 5000): List<EspFound> {
+    suspend fun scan(ctx: Context, durationMs: Long = 5000, type: String = TYPE): List<EspFound> {
         val nsd = ctx.getSystemService(Context.NSD_SERVICE) as NsdManager
         val wifi = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         val lock = wifi.createMulticastLock("esp-scan").apply { setReferenceCounted(false) }
@@ -104,7 +104,7 @@ object EspDiscovery {
         }
         lock.acquire()
         try {
-            nsd.discoverServices(TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+            nsd.discoverServices(type, NsdManager.PROTOCOL_DNS_SD, listener)
             delay(durationMs)
         } finally {
             runCatching { nsd.stopServiceDiscovery(listener) }

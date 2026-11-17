@@ -54,6 +54,7 @@ fun SectionCard(title: String? = null, modifier: Modifier = Modifier, content: @
 fun statusText(cfg: DeviceConfig, s: PlugState): String = when {
     s.source == Source.LOCAL -> "Локально · ${cfg.version}"
     s.source == Source.CLOUD -> "Через хмару"
+    s.source == Source.HUB -> "Через хаб Pi"
     s.connecting -> "Підключення…"
     s.error != null -> s.error
     else -> "Офлайн"
@@ -64,6 +65,7 @@ fun StatusDot(s: PlugState) {
     val color = when (s.source) {
         Source.LOCAL -> OnGreen
         Source.CLOUD -> Color(0xFF3D8BD9)
+        Source.HUB -> Color(0xFF8E5BD6)
         Source.NONE -> if (s.connecting) Color(0xFFE0A030) else MaterialTheme.colorScheme.outline
     }
     Surface(shape = CircleShape, color = color, modifier = Modifier.size(8.dp)) {}

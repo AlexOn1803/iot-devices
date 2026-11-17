@@ -1,0 +1,14 @@
+# Ретранслятор між Raspberry Pi (хаб) і телефоном: wss://iot-hub.<акаунт>.workers.dev
+# Деплой (робить install.sh на Pi): npx wrangler deploy
+name = "iot-hub"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]
