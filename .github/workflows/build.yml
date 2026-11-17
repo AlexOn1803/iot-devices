@@ -84,6 +84,11 @@ jobs:
             kill $P || true
           done
 
+      - name: Hub (Raspberry Pi) on fake devices
+        run: |
+          pip install -q aiohttp
+          timeout 120 python3 hub/tests/test_hub.py
+
   firmware:
     runs-on: ubuntu-latest
     strategy:
