@@ -923,7 +923,7 @@ private fun PinPicker(label: String, value: Int, board: String, analogOnly: Bool
 }
 
 @Composable
-private fun CheckRow(text: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+fun CheckRow(text: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().clickable { onChange(!checked) }, verticalAlignment = Alignment.CenterVertically) {
         Checkbox(checked = checked, onCheckedChange = onChange)
         Text(text, style = MaterialTheme.typography.bodyMedium)

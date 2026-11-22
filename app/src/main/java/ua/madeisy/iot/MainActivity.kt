@@ -49,6 +49,7 @@ class IotApp : Application() {
     lateinit var controller: PlugController
     lateinit var thermostats: ThermostatEngine
     lateinit var inverters: ua.madeisy.iot.inverter.InverterRepo
+    lateinit var rules: ua.madeisy.iot.rules.RuleEngine
 
     override fun onCreate() {
         super.onCreate()
@@ -58,6 +59,7 @@ class IotApp : Application() {
         history = HistoryDb(this)
         controller = PlugController(this, storage, history)
         inverters = ua.madeisy.iot.inverter.InverterRepo(this)
+        rules = ua.madeisy.iot.rules.RuleEngine(this).also { it.start() }
         thermostats = ThermostatEngine(this, storage, controller).also { it.start() }
         Notifications.createChannels(this)
         ScheduleManager.rescheduleAll(this)
@@ -148,6 +150,8 @@ private fun AppRoot(openDevice: String?, consumed: () -> Unit) {
                 else EditScreen(screen.key, nav)
             Screen.AddEsp -> EspAddScreen(nav)
             Screen.Thermostats -> ThermostatsScreen(nav)
+            Screen.Rules -> ua.madeisy.iot.ui.RulesScreen(nav)
+            is Screen.RuleEdit -> ua.madeisy.iot.ui.RuleEditScreen(screen.id, nav)
             Screen.Flash -> FlashScreen(nav)
             Screen.Settings -> SettingsScreen(nav)
             Screen.Help -> HelpScreen(nav)

@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Thermostat
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -78,6 +79,7 @@ fun HomeScreen(nav: Nav) {
                 actions = {
                     if (devices.isNotEmpty() || inverters.isNotEmpty())
                         IconButton(onClick = { groupWidget = true }) { Icon(Icons.Filled.Widgets, "Віджет на кілька пристроїв") }
+                    IconButton(onClick = { nav.push(Screen.Rules) }) { Icon(Icons.Filled.Bolt, "Правила") }
                     IconButton(onClick = { nav.push(Screen.Thermostats) }) { Icon(Icons.Filled.Thermostat, "Термостати") }
                     IconButton(onClick = { nav.push(Screen.Settings) }) { Icon(Icons.Filled.Settings, "Налаштування") }
                 }

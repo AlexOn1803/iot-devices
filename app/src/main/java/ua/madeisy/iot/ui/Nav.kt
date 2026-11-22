@@ -9,6 +9,8 @@ sealed interface Screen {
     data object MqttHelp : Screen
     data object AddEsp : Screen
     data object Thermostats : Screen
+    data object Rules : Screen
+    data class RuleEdit(val id: String) : Screen
     data object Flash : Screen
     data class Inverter(val sn: String) : Screen
 }
