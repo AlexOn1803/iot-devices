@@ -53,6 +53,7 @@ class IotApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        ua.madeisy.iot.diag.HangWatchdog.start(this)
         storage = Storage(this)
         history = HistoryDb(this)
         controller = PlugController(this, storage, history)

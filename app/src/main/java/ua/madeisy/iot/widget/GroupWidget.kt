@@ -10,7 +10,7 @@ import ua.madeisy.iot.R
 
 /** Розміри віджета на кілька пристроїв: скільки пристроїв і скільки даних на кожен. */
 enum class GroupSize(val label: String, val maxDevices: Int, val perDevice: Int) {
-    G22("2×2", 2, 1), G42("4×2", 3, 3), G43("4×3", 4, 3), G34("3×4", 6, 2), G44("4×4", 6, 4);
+    G22("2×2", 2, 1), G42("4×2", 3, 3), G43("4×3", 4, 3), G34("3×4", 6, 4), G44("4×4", 6, 6);
 
     val hint: String get() = "до $maxDevices пристроїв, по $perDevice ${if (perDevice == 1) "значенню" else "значення"} на кожен"
 }
@@ -19,6 +19,11 @@ enum class GroupSize(val label: String, val maxDevices: Int, val perDevice: Int)
 abstract class GroupWidget : BaseWidget() {
     abstract val group: GroupSize
     override val size = WidgetSize.LARGE   // для спільного коду; малюємо своє
+
+    /** Віджет розтягнули чи зменшили — перемалювати під новий розмір. */
+    override fun onAppWidgetOptionsChanged(context: Context, mgr: AppWidgetManager, id: Int, options: android.os.Bundle) {
+        runCatching { render(context, mgr, id) }
+    }
 
     override fun onUpdate(context: Context, mgr: AppWidgetManager, ids: IntArray) {
         BaseWidget.schedulePeriodic(context)
@@ -66,6 +71,11 @@ abstract class GroupWidget : BaseWidget() {
             views.setTextViewText(R.id.w_name, w?.title?.ifBlank { null } ?: "Мої пристрої")
             val c = IotApp.instance.controller
             var oldest = Long.MAX_VALUE
+            // висота віджета (dp, у портретній орієнтації — максимальна) → скільки рядків даних влазить
+            val opts = mgr.getAppWidgetOptions(id)
+            val heightDp = opts.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 0).takeIf { it > 0 } ?: (g.maxDevices * 70)
+            val rowDp = (heightDp - 40) / items.size
+            val multiline = rowDp >= 78
             for (item in items) {
                 val row = RemoteViews(ctx.packageName, R.layout.widget_group_row)
                 val key = item.key
@@ -83,7 +93,8 @@ abstract class GroupWidget : BaseWidget() {
                     val dev = IotApp.instance.storage.device(key)
                     if (dev != null) {
                         val sum = c.summary(dev)
-                        offline = !sum.online
+                        // «офлайн» — лише якщо даних давно немає (зв'язок через хмару теж рахується)
+                        offline = !sum.online && System.currentTimeMillis() - sum.updatedAt > 5 * 60_000
                         if (sum.updatedAt > 0) oldest = minOf(oldest, sum.updatedAt)
                         val wc = WidgetCfg(key)
                         toggle = WidgetData.hasToggle(dev, wc)
@@ -106,7 +117,24 @@ abstract class GroupWidget : BaseWidget() {
                     metrics.drop(1).forEach { add(it.compact) }
                 }.joinToString(" · ")
                 row.setTextViewText(R.id.r_extra, extra)
-                row.setViewVisibility(R.id.r_extra, if (extra.isEmpty()) View.GONE else View.VISIBLE)
+                row.setTextViewText(R.id.r_extra_multi, extra)
+                row.setViewVisibility(R.id.r_extra, if (extra.isEmpty() || multiline) View.GONE else View.VISIBLE)
+                row.setViewVisibility(R.id.r_extra_multi, if (extra.isNotEmpty() && multiline) View.VISIBLE else View.GONE)
+                // низький рядок (віджет зменшили): головне значення дрібніше, щоб не обрізалось
+                row.setTextViewTextSize(R.id.r_main, android.util.TypedValue.COMPLEX_UNIT_SP, if (rowDp < 52) 14f else 17f)
+                if (rowDp < 44) {
+                    // зовсім тісно: назва й значення в один рядок, без додаткових
+                    row.setTextViewText(R.id.r_name, name + "  " + (if (busyKey == key) "…" else main?.value ?: on?.let { if (it) "Увімк." else "Вимк." } ?: "—"))
+                    row.setViewVisibility(R.id.r_main, View.GONE)
+                    row.setViewVisibility(R.id.r_extra, View.GONE)
+                    row.setViewVisibility(R.id.r_extra_multi, View.GONE)
+                }
+                if (android.os.Build.VERSION.SDK_INT >= 31 && rowDp < 44) {
+                    val px = android.util.TypedValue.COMPLEX_UNIT_DIP
+                    val sz = maxOf(24, rowDp - 4).toFloat()
+                    row.setViewLayoutWidth(R.id.r_toggle, sz, px)
+                    row.setViewLayoutHeight(R.id.r_toggle, sz, px)
+                }
                 // на 2×2 немає місця на головне значення окремим рядком, якщо даних нема
                 row.setViewVisibility(R.id.r_toggle, if (toggle) View.VISIBLE else View.GONE)
                 row.setImageViewResource(R.id.r_toggle, if (on == true) R.drawable.widget_btn_on else R.drawable.widget_btn_off)

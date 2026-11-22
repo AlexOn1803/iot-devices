@@ -177,6 +177,8 @@ fun SettingsScreen(nav: Nav) {
 
             SmartEssCard(snackbar)
 
+            HangReportCard()
+
             SectionCard("Загальне") {
                 OutlinedTextField(
                     tariffText,
@@ -452,6 +454,31 @@ fun MqttHelpScreen(nav: Nav) {
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
+        }
+    }
+}
+
+
+/** Якщо додаток «зависав» — звіт для розробника (що робив головний потік). */
+@Composable
+private fun HangReportCard() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var n by remember { mutableStateOf(ua.madeisy.iot.diag.HangWatchdog.count(ctx)) }
+    if (n == 0) return
+    SectionCard("Діагностика") {
+        Text(
+            "Додаток зависав $n раз(и). Звіт показує, що саме його блокувало — надішли його в чат розробки.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                val text = ua.madeisy.iot.diag.HangWatchdog.report(ctx) ?: return@OutlinedButton
+                val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+                    .putExtra(android.content.Intent.EXTRA_SUBJECT, "IoT Devices — звіт про зависання")
+                    .putExtra(android.content.Intent.EXTRA_TEXT, text)
+                ctx.startActivity(android.content.Intent.createChooser(send, "Надіслати звіт"))
+            }) { Text("Поділитися звітом") }
+            TextButton(onClick = { ua.madeisy.iot.diag.HangWatchdog.clear(ctx); n = 0 }) { Text("Очистити") }
         }
     }
 }

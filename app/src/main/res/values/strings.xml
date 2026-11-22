@@ -13,7 +13,7 @@
     <string name="widget_group43_name">Кілька пристроїв 4×3</string>
     <string name="widget_group43_desc">до 4 пристроїв: розетки, плати, інвертор — з кнопками</string>
     <string name="widget_group34_name">Кілька пристроїв 3×4</string>
-    <string name="widget_group34_desc">до 6 пристроїв: розетки, плати, інвертор — з кнопками</string>
+    <string name="widget_group34_desc">до 6 пристроїв по 4 значення; можна зменшити до 3×2</string>
     <string name="widget_group44_name">Кілька пристроїв 4×4</string>
-    <string name="widget_group44_desc">до 6 пристроїв: розетки, плати, інвертор — з кнопками</string>
+    <string name="widget_group44_desc">до 6 пристроїв по 6 значень; можна зменшити до 4×2</string>
 </resources>
