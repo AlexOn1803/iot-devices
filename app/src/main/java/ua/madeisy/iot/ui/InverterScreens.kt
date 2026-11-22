@@ -210,7 +210,7 @@ fun InverterScreen(sn: String, nav: Nav) {
             Box(Modifier.padding(pad).fillMaxSize(), contentAlignment = Alignment.Center) { Text("Інвертор не знайдено") }
         } else {
         val sum = s.summary
-        PullRefresh(Modifier.padding(pad).fillMaxSize(), onRefresh = { repo.refresh(d) }) {
+        PullRefresh(Modifier.padding(pad).fillMaxSize(), onRefresh = { kotlinx.coroutines.withTimeoutOrNull(5000) { repo.refresh(d) } }) {
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),

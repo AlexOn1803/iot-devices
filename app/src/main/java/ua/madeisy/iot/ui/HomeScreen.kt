@@ -98,15 +98,19 @@ fun HomeScreen(nav: Nav) {
         if (devices.isEmpty() && inverters.isEmpty()) {
             EmptyState(Modifier.padding(pad), nav)
         } else {
-            PullRefresh(Modifier.fillMaxSize(), onRefresh = {
-                kotlinx.coroutines.coroutineScope {
-                    devices.forEach { d -> launch { app.controller.refreshOnce(d.key) } }
-                    inverters.forEach { d -> launch { app.inverters.refresh(d) } }
+            // індикатор має з'являтися під верхньою панеллю, а не за нею
+            PullRefresh(Modifier.padding(top = pad.calculateTopPadding()).fillMaxSize(), onRefresh = {
+                // не довше 4 с: офлайн-пристрої не тримають «крутилку» хвилину
+                kotlinx.coroutines.withTimeoutOrNull(4000) {
+                    kotlinx.coroutines.coroutineScope {
+                        devices.forEach { d -> launch(kotlinx.coroutines.Dispatchers.IO) { app.controller.refreshOnce(d.key) } }
+                        inverters.forEach { d -> launch(kotlinx.coroutines.Dispatchers.IO) { app.inverters.refresh(d) } }
+                    }
                 }
             }) {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = pad.calculateTopPadding() + 8.dp, bottom = pad.calculateBottomPadding() + 88.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = pad.calculateBottomPadding() + 88.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(inverters, key = { "inv-" + it.sn }) { d ->

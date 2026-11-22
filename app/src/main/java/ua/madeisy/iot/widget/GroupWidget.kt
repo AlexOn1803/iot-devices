@@ -22,6 +22,7 @@ abstract class GroupWidget : BaseWidget() {
 
     override fun onUpdate(context: Context, mgr: AppWidgetManager, ids: IntArray) {
         BaseWidget.schedulePeriodic(context)
+        ids.forEach { id -> if (WidgetData.load(context, id) == null) BaseWidget.takePending(context, id)?.let { WidgetData.save(context, id, it) } }
         ids.forEach { runCatching { render(context, mgr, it) } }
         val keys = ids.toList().flatMap { WidgetData.load(context, it)?.items?.map { i -> i.key } ?: emptyList() }.distinct()
         if (keys.isEmpty()) return

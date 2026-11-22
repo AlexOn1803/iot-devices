@@ -115,7 +115,7 @@ fun DeviceScreen(key: String, nav: Nav) {
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
-        PullRefresh(Modifier.padding(pad).fillMaxSize(), onRefresh = { app.controller.refreshOnce(key) }) {
+        PullRefresh(Modifier.padding(pad).fillMaxSize(), onRefresh = { kotlinx.coroutines.withTimeoutOrNull(5000) { app.controller.refreshOnce(key) } }) {
         Column(
             Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),

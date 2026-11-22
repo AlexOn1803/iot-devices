@@ -57,6 +57,8 @@ class WidgetConfigActivity : ComponentActivity() {
         setResult(RESULT_CANCELED, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId))
         if (widgetId == AppWidgetManager.INVALID_APPWIDGET_ID) { finish(); return }
         val size = BaseWidget.sizeOf(this, widgetId)
+        // віджет щойно додано з додатку — налаштування вже вибрані там
+        BaseWidget.takePending(this, widgetId)?.let { done(widgetId, it); return }
         val existing = WidgetData.load(this, widgetId)
         val group = GroupWidget.groupOf(this, widgetId)
         setContent {
@@ -191,7 +193,7 @@ fun PinWidgetDialog(device: DeviceConfig, onDismiss: () -> Unit) {
         },
         confirmButton = {
             if (canPin) androidx.compose.material3.TextButton(onClick = {
-                BaseWidget.requestPin(ctx, size, WidgetCfg(device.key, toggle, metrics.toList()))
+                pinResult(ctx, BaseWidget.requestPin(ctx, size, WidgetCfg(device.key, toggle, metrics.toList())))
                 onDismiss()
             }) { Text("Додати") }
         },
@@ -227,6 +229,7 @@ private fun DeviceOptions(
     if (!device.isEsp) {
         option(WidgetCfg.AUTO, "Вкл/викл розетки")
     } else {
+                    PinPermissionHint()
         option(WidgetCfg.AUTO, "Головне реле (" + (espState.primary?.name ?: "перше") + ")")
         espState.comps.filter { it.isSwitchable }.forEach { c -> option(c.i, c.name) }
     }
@@ -319,6 +322,7 @@ fun PinInverterWidgetDialog(sn: String, onDismiss: () -> Unit) {
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 } else {
+                    PinPermissionHint()
                     Text("Розмір", style = MaterialTheme.typography.titleMedium)
                     WidgetSize.entries.forEach { s ->
                         Row(Modifier.fillMaxWidth().clickable {
@@ -339,7 +343,7 @@ fun PinInverterWidgetDialog(sn: String, onDismiss: () -> Unit) {
         },
         confirmButton = {
             if (canPin) androidx.compose.material3.TextButton(onClick = {
-                BaseWidget.requestPin(ctx, size, WidgetCfg(key, WidgetCfg.NONE, metrics.toList()))
+                pinResult(ctx, BaseWidget.requestPin(ctx, size, WidgetCfg(key, WidgetCfg.NONE, metrics.toList())))
                 onDismiss()
             }) { Text("Додати") }
         },
@@ -461,6 +465,7 @@ fun PinGroupWidgetDialog(onDismiss: () -> Unit) {
                         style = MaterialTheme.typography.bodyMedium,
                     )
                 } else {
+                    PinPermissionHint()
                     Text("Розмір", style = MaterialTheme.typography.titleMedium)
                     GroupSize.entries.forEach { s ->
                         Row(Modifier.fillMaxWidth().clickable {
@@ -481,10 +486,42 @@ fun PinGroupWidgetDialog(onDismiss: () -> Unit) {
         },
         confirmButton = {
             if (canPin) androidx.compose.material3.TextButton(enabled = items.isNotEmpty(), onClick = {
-                BaseWidget.requestPinGroup(ctx, g, WidgetCfg("group", WidgetCfg.NONE, emptyList(), items.toList(), title.trim()))
+                pinResult(ctx, BaseWidget.requestPinGroup(ctx, g, WidgetCfg("group", WidgetCfg.NONE, emptyList(), items.toList(), title.trim())))
                 onDismiss()
             }) { Text("Додати") }
         },
         dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text(if (canPin) "Скасувати" else "Зрозуміло") } },
     )
+}
+
+
+/** Після запиту на додавання віджета: якщо лаунчер відмовив — підказати, що робити. */
+internal fun pinResult(ctx: android.content.Context, ok: Boolean) {
+    val xiaomi = android.os.Build.MANUFACTURER.lowercase().let { it.contains("xiaomi") || it.contains("redmi") || it.contains("poco") }
+    val msg = when {
+        !ok -> "Лаунчер не дозволяє додавати віджети з додатку. Утримуй порожнє місце на екрані → Віджети → IoT Devices."
+        xiaomi -> "Якщо віджет не з'явився: Налаштування телефона → Додатки → IoT Devices → Інші дозволи → «Ярлики на робочому столі» → Дозволити, і спробуй ще раз."
+        else -> null
+    }
+    if (msg != null) android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_LONG).show()
+}
+
+/** Кнопка «Дозволи додатку» (на Xiaomi без дозволу «Ярлики на робочому столі» віджет не додається). */
+@Composable
+internal fun PinPermissionHint() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val m = android.os.Build.MANUFACTURER.lowercase()
+    if (!(m.contains("xiaomi") || m.contains("redmi") || m.contains("poco"))) return
+    Text(
+        "Xiaomi: щоб віджет додавався з додатку, дозволь «Ярлики на робочому столі» (Інші дозволи).",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    androidx.compose.material3.TextButton(onClick = {
+        // спершу екран дозволів MIUI, якщо його немає — звичайні налаштування додатку
+        val miui = android.content.Intent("miui.intent.action.APP_PERM_EDITOR")
+            .putExtra("extra_pkgname", ctx.packageName).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        val std = android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            .setData(android.net.Uri.parse("package:" + ctx.packageName)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { ctx.startActivity(miui) }.onFailure { runCatching { ctx.startActivity(std) } }
+    }) { Text("Відкрити дозволи") }
 }

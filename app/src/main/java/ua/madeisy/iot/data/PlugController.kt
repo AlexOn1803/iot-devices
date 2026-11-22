@@ -69,7 +69,7 @@ class PlugController(
         val now = System.currentTimeMillis()
         if (important || now - (lastWidgetAt[key] ?: 0) >= 15_000) {
             lastWidgetAt[key] = now
-            scope.launch(Dispatchers.Main) { runCatching { PlugWidget.updateAll(ctx) } }
+            PlugWidget.requestUpdate(ctx)
         }
     }
 
@@ -213,7 +213,7 @@ class PlugController(
         }
         if (important || now - (lastWidgetAt[key] ?: 0) >= 10_000) {
             lastWidgetAt[key] = now
-            scope.launch(Dispatchers.Main) { runCatching { PlugWidget.updateAll(ctx) } }
+            PlugWidget.requestUpdate(ctx)
         }
     }
 

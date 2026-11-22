@@ -65,6 +65,24 @@ abstract class BaseWidget : AppWidgetProvider() {
             return dev to w
         }
 
+        private val updaterScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        @Volatile private var updateQueued = false
+
+        /**
+         * Перемалювати віджети, але не частіше ніж раз на ~0,7 с і не в головному потоці
+         * (раніше часті оновлення з головного потоку могли «підвішувати» додаток).
+         */
+        fun requestUpdate(ctx: Context) {
+            if (updateQueued) return
+            updateQueued = true
+            val app = ctx.applicationContext
+            updaterScope.launch {
+                kotlinx.coroutines.delay(700)
+                updateQueued = false
+                runCatching { updateAll(app) }
+            }
+        }
+
         fun updateAll(ctx: Context) {
             val mgr = AppWidgetManager.getInstance(ctx)
             allWidgets(ctx).forEach { (id, size) -> runCatching { render(ctx, mgr, id, size) } }
@@ -238,6 +256,7 @@ abstract class BaseWidget : AppWidgetProvider() {
         fun requestPinGroup(ctx: Context, g: GroupSize, cfg: WidgetCfg): Boolean {
             val mgr = AppWidgetManager.getInstance(ctx)
             if (!mgr.isRequestPinAppWidgetSupported) return false
+            savePending(ctx, GroupWidget.providerFor(g), cfg)
             val cb = Intent(ctx, PlugWidget::class.java).setAction(ACTION_PINNED).putExtra(EXTRA_CFG, cfg.toJson())
             val pi = PendingIntent.getBroadcast(
                 ctx, (cfg.toJson() + g).hashCode(), cb,
@@ -252,9 +271,32 @@ abstract class BaseWidget : AppWidgetProvider() {
          * Попросити лаунчер додати віджет на головний екран прямо з додатку.
          * Налаштування передаються в колбек і зберігаються, щойно лаунчер видасть id віджета.
          */
+        // ---- віджет, доданий з додатку ----
+        // Частина лаунчерів після додавання сама відкриває екран налаштування віджета (і скасовує віджет,
+        // якщо з нього вийти), а колбек з налаштуваннями приходить пізніше. Тому налаштування
+        // запам'ятовуємо наперед: екран налаштування підхопить їх і одразу закриється.
+        private const val PENDING = "pendingPin"
+
+        private fun savePending(ctx: Context, provider: Class<*>, cfg: WidgetCfg) {
+            ctx.getSharedPreferences("widgets", Context.MODE_PRIVATE).edit().putString(
+                PENDING, JSONObject().put("cls", provider.name).put("cfg", cfg.toJson()).put("at", System.currentTimeMillis()).toString()
+            ).apply()
+        }
+
+        /** Налаштування віджета, щойно доданого з додатку (якщо це він). */
+        fun takePending(ctx: Context, widgetId: Int): WidgetCfg? {
+            val prefs = ctx.getSharedPreferences("widgets", Context.MODE_PRIVATE)
+            val j = runCatching { JSONObject(prefs.getString(PENDING, null) ?: return null) }.getOrNull() ?: return null
+            val cls = AppWidgetManager.getInstance(ctx).getAppWidgetInfo(widgetId)?.provider?.className
+            if (cls != j.optString("cls") || System.currentTimeMillis() - j.optLong("at") > 5 * 60_000) return null
+            prefs.edit().remove(PENDING).apply()
+            return WidgetCfg.parse(j.optString("cfg"))
+        }
+
         fun requestPin(ctx: Context, size: WidgetSize, cfg: WidgetCfg): Boolean {
             val mgr = AppWidgetManager.getInstance(ctx)
             if (!mgr.isRequestPinAppWidgetSupported) return false
+            savePending(ctx, providerFor(size), cfg)
             val cb = Intent(ctx, PlugWidget::class.java).setAction(ACTION_PINNED).putExtra(EXTRA_CFG, cfg.toJson())
             // MUTABLE — лаунчер дописує в цей intent id нового віджета
             val pi = PendingIntent.getBroadcast(
@@ -303,7 +345,7 @@ abstract class BaseWidget : AppWidgetProvider() {
                 try {
                     keys.forEach { k -> refreshKey(k, force = false) }
                 } finally {
-                    withContext(Dispatchers.Main) { updateAll(ctx) }
+                    runCatching { updateAll(ctx) }
                     then()
                 }
             }
@@ -316,6 +358,7 @@ abstract class BaseWidget : AppWidgetProvider() {
 
     override fun onUpdate(context: Context, mgr: AppWidgetManager, ids: IntArray) {
         schedulePeriodic(context)
+        ids.forEach { id -> if (WidgetData.load(context, id) == null) takePending(context, id)?.let { WidgetData.save(context, id, it) } }
         ids.forEach { render(context, mgr, it, size) }
         val keys = ids.toList().mapNotNull { WidgetData.load(context, it)?.deviceKey }.distinct()
         if (keys.isEmpty()) return
@@ -332,6 +375,7 @@ abstract class BaseWidget : AppWidgetProvider() {
                 val id = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, AppWidgetManager.INVALID_APPWIDGET_ID)
                 val cfg = WidgetCfg.parse(intent.getStringExtra(EXTRA_CFG)) ?: return
                 if (id == AppWidgetManager.INVALID_APPWIDGET_ID) return
+                context.getSharedPreferences("widgets", Context.MODE_PRIVATE).edit().remove(PENDING).apply()
                 WidgetData.save(context, id, cfg)
                 schedulePeriodic(context)
                 update(context, id)
@@ -370,7 +414,7 @@ abstract class BaseWidget : AppWidgetProvider() {
                             c.espSet(key, JSONObject().put("i", w.toggle).put("toggle", true))
                         }
                     } finally {
-                        withContext(Dispatchers.Main) { updateAll(context) }
+                        runCatching { updateAll(context) }
                         pending.finish()
                     }
                 }
@@ -385,6 +429,7 @@ class PlugWidget : BaseWidget() {
 
     companion object {
         fun updateAll(ctx: Context) = BaseWidget.updateAll(ctx)
+        fun requestUpdate(ctx: Context) = BaseWidget.requestUpdate(ctx)
     }
 }
 
