@@ -139,7 +139,11 @@ abstract class GroupWidget : BaseWidget() {
                 row.setViewVisibility(R.id.r_toggle, if (toggle) View.VISIBLE else View.GONE)
                 row.setImageViewResource(R.id.r_toggle, if (on == true) R.drawable.widget_btn_on else R.drawable.widget_btn_off)
                 if (toggle) row.setOnClickPendingIntent(R.id.r_toggle, BaseWidget.action(ctx, BaseWidget.ACTION_TOGGLE, key, id))
-                row.setOnClickPendingIntent(R.id.r_root, BaseWidget.openApp(ctx, key))
+                // з кнопкою: натиск на рядок лише оновлює стан; без кнопки — відкриває пристрій
+                row.setOnClickPendingIntent(
+                    R.id.r_root,
+                    if (toggle) BaseWidget.action(ctx, BaseWidget.ACTION_REFRESH, key, id) else BaseWidget.openApp(ctx, key),
+                )
                 views.addView(R.id.w_rows, row)
             }
             val stale = oldest != Long.MAX_VALUE && System.currentTimeMillis() - oldest > 10 * 60_000
