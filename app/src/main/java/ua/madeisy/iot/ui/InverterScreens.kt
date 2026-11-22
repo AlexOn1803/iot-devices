@@ -10,7 +10,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Widgets
@@ -200,7 +199,6 @@ fun InverterScreen(sn: String, nav: Nav) {
                 navigationIcon = { IconButton(onClick = { nav.pop() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Назад") } },
                 actions = {
                     if (d != null) {
-                        IconButton(onClick = { scope.launch { repo.refresh(d) } }) { Icon(Icons.Filled.Refresh, "Оновити") }
                         IconButton(onClick = { pinWidget = true }) { Icon(Icons.Filled.Widgets, "Віджет на головний екран") }
                         IconButton(onClick = { rename = true }) { Icon(Icons.Filled.Edit, "Перейменувати") }
                     }
@@ -212,8 +210,9 @@ fun InverterScreen(sn: String, nav: Nav) {
             Box(Modifier.padding(pad).fillMaxSize(), contentAlignment = Alignment.Center) { Text("Інвертор не знайдено") }
         } else {
         val sum = s.summary
+        PullRefresh(Modifier.padding(pad).fillMaxSize(), onRefresh = { repo.refresh(d) }) {
         Column(
-            Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (s.loading && s.points.isEmpty()) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -259,6 +258,7 @@ fun InverterScreen(sn: String, nav: Nav) {
                 "Серійний номер ${d.sn} · збирач даних ${d.pn}",
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
         }
         }
     }

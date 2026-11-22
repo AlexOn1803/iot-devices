@@ -79,6 +79,66 @@
                 android:resource="@xml/widget_large_info" />
         </receiver>
 
+        <receiver
+            android:name=".widget.GroupWidget22"
+            android:exported="true"
+            android:label="@string/widget_group22_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_group22_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.GroupWidget42"
+            android:exported="true"
+            android:label="@string/widget_group42_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_group42_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.GroupWidget43"
+            android:exported="true"
+            android:label="@string/widget_group43_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_group43_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.GroupWidget34"
+            android:exported="true"
+            android:label="@string/widget_group34_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_group34_info" />
+        </receiver>
+
+        <receiver
+            android:name=".widget.GroupWidget44"
+            android:exported="true"
+            android:label="@string/widget_group44_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_group44_info" />
+        </receiver>
+
         <receiver android:name=".service.ScheduleReceiver" android:exported="false" />
 
         <receiver android:name=".service.BootReceiver" android:exported="true">

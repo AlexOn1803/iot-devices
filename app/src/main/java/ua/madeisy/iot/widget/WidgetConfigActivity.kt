@@ -58,8 +58,12 @@ class WidgetConfigActivity : ComponentActivity() {
         if (widgetId == AppWidgetManager.INVALID_APPWIDGET_ID) { finish(); return }
         val size = BaseWidget.sizeOf(this, widgetId)
         val existing = WidgetData.load(this, widgetId)
+        val group = GroupWidget.groupOf(this, widgetId)
         setContent {
-            AppTheme { ConfigScreen(size, existing) { cfg -> done(widgetId, cfg) } }
+            AppTheme {
+                if (group != null) GroupConfigScreen(group, existing) { cfg -> done(widgetId, cfg) }
+                else ConfigScreen(size, existing) { cfg -> done(widgetId, cfg) }
+            }
         }
     }
 
@@ -243,19 +247,19 @@ private fun DeviceOptions(
             }
         }
     }
-    MetricPicker(available, WidgetData.defaults(device, available), size, metrics)
+    MetricPicker(available, WidgetData.defaults(device, available), size.maxMetrics, metrics)
 }
 
 /** Вибір даних для віджета (спільний для всіх типів пристроїв). */
 @Composable
-private fun MetricPicker(available: List<Metric>, defaults: List<Metric>, size: WidgetSize, metrics: MutableList<String>) {
+private fun MetricPicker(available: List<Metric>, defaults: List<Metric>, max: Int, metrics: MutableList<String>) {
     Text(
-        "Дані — до ${size.maxMetrics}" + if (size.maxMetrics > 1) " (у порядку вибору)" else "",
+        "Дані — до ${max}" + if (max > 1) " (у порядку вибору)" else "",
         style = MaterialTheme.typography.titleMedium,
     )
     if (metrics.isEmpty() && available.isNotEmpty()) {
         Text(
-            "Нічого не вибрано — покажу типові: " + defaults.take(size.maxMetrics).joinToString { it.label },
+            "Нічого не вибрано — покажу типові: " + defaults.take(max).joinToString { it.label },
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
@@ -266,8 +270,8 @@ private fun MetricPicker(available: List<Metric>, defaults: List<Metric>, size: 
             Modifier.fillMaxWidth().clickable {
                 if (checked) metrics.remove(m.id)
                 else {
-                    if (size.maxMetrics == 1) metrics.clear()
-                    if (metrics.size < size.maxMetrics) metrics.add(m.id)
+                    if (max == 1) metrics.clear()
+                    if (metrics.size < max) metrics.add(m.id)
                 }
             },
             verticalAlignment = Alignment.CenterVertically,
@@ -277,7 +281,7 @@ private fun MetricPicker(available: List<Metric>, defaults: List<Metric>, size: 
                 Text(m.label)
                 Text(m.value, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (checked && size.maxMetrics > 1) Text("${idx + 1}", style = MaterialTheme.typography.titleMedium,
+            if (checked && max > 1) Text("${idx + 1}", style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(end = 8.dp))
         }
     }
@@ -293,7 +297,7 @@ private fun InverterOptions(key: String, size: WidgetSize, metrics: MutableList<
         "Поля інвертора з'являться, щойно прийдуть дані з SmartESS.",
         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    MetricPicker(available, WidgetData.inverterDefaults(available), size, metrics)
+    MetricPicker(available, WidgetData.inverterDefaults(available), size.maxMetrics, metrics)
 }
 
 /** Діалог «Віджет на головний екран» з екрана інвертора. */
@@ -336,6 +340,148 @@ fun PinInverterWidgetDialog(sn: String, onDismiss: () -> Unit) {
         confirmButton = {
             if (canPin) androidx.compose.material3.TextButton(onClick = {
                 BaseWidget.requestPin(ctx, size, WidgetCfg(key, WidgetCfg.NONE, metrics.toList()))
+                onDismiss()
+            }) { Text("Додати") }
+        },
+        dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text(if (canPin) "Скасувати" else "Зрозуміло") } },
+    )
+}
+
+
+// ======================= віджет на кілька пристроїв =======================
+
+@Composable
+private fun GroupConfigScreen(g: GroupSize, existing: WidgetCfg?, onSave: (WidgetCfg) -> Unit) {
+    val items = remember { mutableStateListOf<GroupItem>().apply { existing?.items?.let { addAll(it) } } }
+    var title by remember { mutableStateOf(existing?.title ?: "") }
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("Віджет · кілька пристроїв ${g.label}") }) },
+        bottomBar = {
+            Button(
+                enabled = items.isNotEmpty(),
+                onClick = { onSave(WidgetCfg("group", WidgetCfg.NONE, emptyList(), items.toList(), title.trim())) },
+                modifier = Modifier.fillMaxWidth().padding(16.dp).padding(bottom = 16.dp),
+            ) { Text("Готово") }
+        },
+    ) { pad ->
+        Column(
+            Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) { GroupEditor(g, items, title) { title = it } }
+    }
+}
+
+/** Вибір пристроїв (у порядку) і даних для кожного. Спільний для налаштування й додавання з додатку. */
+@Composable
+fun GroupEditor(g: GroupSize, items: MutableList<GroupItem>, title: String, onTitle: (String) -> Unit) {
+    val app = IotApp.instance
+    val devices by app.storage.devices.collectAsState()
+    val inverters by app.inverters.devices.collectAsState()
+    app.controller.states.collectAsState().value
+    app.controller.espStates.collectAsState().value
+    app.inverters.states.collectAsState().value
+    val all = inverters.map { WidgetData.INV_PREFIX + it.sn to it.alias } + devices.map { it.key to it.name }
+    var editing by remember { mutableStateOf<String?>(null) }
+
+    androidx.compose.material3.OutlinedTextField(
+        title, onTitle, label = { Text("Заголовок (необов'язково)") }, placeholder = { Text("Мої пристрої") },
+        singleLine = true, modifier = Modifier.fillMaxWidth(),
+    )
+    Spacer(Modifier.height(8.dp))
+    Text("Пристрої — до ${g.maxDevices} (у порядку вибору)", style = MaterialTheme.typography.titleMedium)
+    Text(g.hint.replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+    all.forEach { (key, name) ->
+        androidx.compose.runtime.key(key) {
+            val idx = items.indexOfFirst { it.key == key }
+            val checked = idx >= 0
+            Row(
+                Modifier.fillMaxWidth().clickable {
+                    if (checked) items.removeAt(idx) else if (items.size < g.maxDevices) items.add(GroupItem(key))
+                },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(checked = checked, onCheckedChange = null, modifier = Modifier.padding(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(name)
+                    val shown = if (checked) WidgetData.itemMetrics(items[idx], g.perDevice) else emptyList()
+                    if (checked) Text(
+                        shown.joinToString(" · ") { it.compact }.ifBlank { "—" },
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (checked) {
+                    Text("${idx + 1}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                    androidx.compose.material3.TextButton(onClick = { editing = key }) { Text("Дані") }
+                }
+            }
+        }
+    }
+    editing?.let { key ->
+        val idx = items.indexOfFirst { it.key == key }
+        if (idx < 0) { editing = null; return@let }
+        val chosen = remember(key) { mutableStateListOf<String>().apply { addAll(items[idx].metrics) } }
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { editing = null },
+            title = { Text(WidgetData.nameOf(key) ?: key) },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    val available = WidgetData.metricsFor(key)
+                    if (WidgetData.isInverter(key)) ua.madeisy.iot.ui.KeepInverters() else KeepConnected(key)
+                    MetricPicker(available, WidgetData.defaultsFor(key, available), g.perDevice, chosen)
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    val i = items.indexOfFirst { it.key == key }
+                    if (i >= 0) items[i] = items[i].copy(metrics = chosen.toList())
+                    editing = null
+                }) { Text("Готово") }
+            },
+        )
+    }
+}
+
+/** Діалог «віджет на кілька пристроїв» з головного екрана. */
+@Composable
+fun PinGroupWidgetDialog(onDismiss: () -> Unit) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    var g by remember { mutableStateOf(GroupSize.G43) }
+    val items = remember { mutableStateListOf<GroupItem>() }
+    var title by remember { mutableStateOf("") }
+    val canPin = remember { BaseWidget.canPin(ctx) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Віджет: кілька пристроїв") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (!canPin) {
+                    Text(
+                        "Лаунчер не дозволяє додавати віджети з додатку. Утримуй порожнє місце на головному екрані → Віджети → IoT Devices → «Кілька пристроїв».",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    Text("Розмір", style = MaterialTheme.typography.titleMedium)
+                    GroupSize.entries.forEach { s ->
+                        Row(Modifier.fillMaxWidth().clickable {
+                            g = s
+                            while (items.size > s.maxDevices) items.removeAt(items.lastIndex)
+                        }, verticalAlignment = Alignment.CenterVertically) {
+                            RadioButton(selected = g == s, onClick = null, modifier = Modifier.padding(10.dp))
+                            Column {
+                                Text(s.label)
+                                Text(s.hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    GroupEditor(g, items, title) { title = it }
+                }
+            }
+        },
+        confirmButton = {
+            if (canPin) androidx.compose.material3.TextButton(enabled = items.isNotEmpty(), onClick = {
+                BaseWidget.requestPinGroup(ctx, g, WidgetCfg("group", WidgetCfg.NONE, emptyList(), items.toList(), title.trim()))
                 onDismiss()
             }) { Text("Додати") }
         },

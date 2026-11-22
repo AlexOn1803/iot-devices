@@ -115,8 +115,9 @@ fun DeviceScreen(key: String, nav: Nav) {
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
+        PullRefresh(Modifier.padding(pad).fillMaxSize(), onRefresh = { app.controller.refreshOnce(key) }) {
         Column(
-            Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             StatusLine(cfg, s, Modifier.padding(top = 4.dp))
@@ -130,6 +131,7 @@ fun DeviceScreen(key: String, nav: Nav) {
             }
             RawDpsCard(s)
             Spacer(Modifier.height(24.dp))
+        }
         }
     }
 }

@@ -6,4 +6,14 @@
     <string name="widget_small_desc">Кнопка 1×1 з одним значенням</string>
     <string name="widget_large_name">IoT · панель</string>
     <string name="widget_large_desc">Кнопка і до шести значень плитками</string>
+    <string name="widget_group22_name">Кілька пристроїв 2×2</string>
+    <string name="widget_group22_desc">2 пристрої: розетки, плати, інвертор — з кнопками</string>
+    <string name="widget_group42_name">Кілька пристроїв 4×2</string>
+    <string name="widget_group42_desc">до 3 пристроїв: розетки, плати, інвертор — з кнопками</string>
+    <string name="widget_group43_name">Кілька пристроїв 4×3</string>
+    <string name="widget_group43_desc">до 4 пристроїв: розетки, плати, інвертор — з кнопками</string>
+    <string name="widget_group34_name">Кілька пристроїв 3×4</string>
+    <string name="widget_group34_desc">до 6 пристроїв: розетки, плати, інвертор — з кнопками</string>
+    <string name="widget_group44_name">Кілька пристроїв 4×4</string>
+    <string name="widget_group44_desc">до 6 пристроїв: розетки, плати, інвертор — з кнопками</string>
 </resources>

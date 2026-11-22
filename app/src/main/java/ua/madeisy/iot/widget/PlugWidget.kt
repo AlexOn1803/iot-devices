@@ -30,8 +30,8 @@ abstract class BaseWidget : AppWidgetProvider() {
     abstract val size: WidgetSize
 
     companion object {
-        private const val ACTION_TOGGLE = "ua.madeisy.iot.WIDGET_TOGGLE"
-        private const val ACTION_REFRESH = "ua.madeisy.iot.WIDGET_REFRESH"
+        const val ACTION_TOGGLE = "ua.madeisy.iot.WIDGET_TOGGLE"
+        const val ACTION_REFRESH = "ua.madeisy.iot.WIDGET_REFRESH"
         private const val ACTION_PERIODIC = "ua.madeisy.iot.WIDGET_PERIODIC"
         private const val ACTION_PINNED = "ua.madeisy.iot.WIDGET_PINNED"
         private const val EXTRA_CFG = "cfg"
@@ -68,10 +68,13 @@ abstract class BaseWidget : AppWidgetProvider() {
         fun updateAll(ctx: Context) {
             val mgr = AppWidgetManager.getInstance(ctx)
             allWidgets(ctx).forEach { (id, size) -> runCatching { render(ctx, mgr, id, size) } }
+            GroupWidget.allIds(ctx).forEach { id -> runCatching { GroupWidget.render(ctx, mgr, id) } }
         }
 
         fun update(ctx: Context, widgetId: Int) {
-            render(ctx, AppWidgetManager.getInstance(ctx), widgetId, sizeOf(ctx, widgetId))
+            val mgr = AppWidgetManager.getInstance(ctx)
+            if (GroupWidget.groupOf(ctx, widgetId) != null) GroupWidget.render(ctx, mgr, widgetId)
+            else render(ctx, mgr, widgetId, sizeOf(ctx, widgetId))
         }
 
         private fun layoutFor(size: WidgetSize) = when (size) {
@@ -200,16 +203,17 @@ abstract class BaseWidget : AppWidgetProvider() {
             mgr.updateAppWidget(id, views)
         }
 
-        private fun action(ctx: Context, action: String, key: String, widgetId: Int): PendingIntent {
+        fun action(ctx: Context, action: String, key: String, widgetId: Int): PendingIntent {
             val i = Intent(ctx, PlugWidget::class.java).setAction(action)
                 .putExtra(EXTRA_KEY, key).putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
             return PendingIntent.getBroadcast(
-                ctx, (action + widgetId).hashCode(), i,
+                // ключ — у коді запиту: у віджеті на кілька пристроїв кожен рядок має свою кнопку
+                ctx, (action + widgetId + "|" + key).hashCode(), i,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
         }
 
-        private fun openApp(ctx: Context, key: String): PendingIntent {
+        fun openApp(ctx: Context, key: String): PendingIntent {
             val i = Intent(ctx, MainActivity::class.java).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 putExtra(MainActivity.EXTRA_DEVICE, key)
@@ -217,7 +221,7 @@ abstract class BaseWidget : AppWidgetProvider() {
             return PendingIntent.getActivity(ctx, key.hashCode(), i, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         }
 
-        private fun configure(ctx: Context, widgetId: Int): PendingIntent {
+        fun configure(ctx: Context, widgetId: Int): PendingIntent {
             val i = Intent(ctx, WidgetConfigActivity::class.java)
                 .setAction(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE + widgetId)  // унікальний для кожного віджета
                 .putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, widgetId)
@@ -229,6 +233,17 @@ abstract class BaseWidget : AppWidgetProvider() {
             WidgetSize.SMALL -> SmallWidget::class.java
             WidgetSize.MEDIUM -> PlugWidget::class.java
             WidgetSize.LARGE -> LargeWidget::class.java
+        }
+
+        fun requestPinGroup(ctx: Context, g: GroupSize, cfg: WidgetCfg): Boolean {
+            val mgr = AppWidgetManager.getInstance(ctx)
+            if (!mgr.isRequestPinAppWidgetSupported) return false
+            val cb = Intent(ctx, PlugWidget::class.java).setAction(ACTION_PINNED).putExtra(EXTRA_CFG, cfg.toJson())
+            val pi = PendingIntent.getBroadcast(
+                ctx, (cfg.toJson() + g).hashCode(), cb,
+                PendingIntent.FLAG_UPDATE_CURRENT or (if (android.os.Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0)
+            )
+            return mgr.requestPinAppWidget(ComponentName(ctx, GroupWidget.providerFor(g)), null, pi)
         }
 
         fun canPin(ctx: Context): Boolean = AppWidgetManager.getInstance(ctx).isRequestPinAppWidgetSupported
@@ -257,7 +272,7 @@ abstract class BaseWidget : AppWidgetProvider() {
         }
 
         private fun cancelPeriodicIfUnused(ctx: Context) {
-            if (allWidgets(ctx).isEmpty()) (ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(periodicIntent(ctx))
+            if (allWidgets(ctx).isEmpty() && GroupWidget.allIds(ctx).isEmpty()) (ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager).cancel(periodicIntent(ctx))
         }
 
         private fun periodicIntent(ctx: Context): PendingIntent = PendingIntent.getBroadcast(
@@ -266,10 +281,11 @@ abstract class BaseWidget : AppWidgetProvider() {
         )
 
         private fun usedKeys(ctx: Context): List<String> =
-            allWidgets(ctx).mapNotNull { (id, _) -> WidgetData.load(ctx, id)?.deviceKey }.distinct()
+            (allWidgets(ctx).mapNotNull { (id, _) -> WidgetData.load(ctx, id)?.deviceKey } +
+                GroupWidget.allIds(ctx).flatMap { id -> WidgetData.load(ctx, id)?.items?.map { it.key }.orEmpty() }).distinct()
 
         /** Оновити ключ пристрою: інвертор — через хмару SmartESS, решта — як завжди. */
-        private suspend fun refreshKey(key: String, force: Boolean) {
+        suspend fun refreshKey(key: String, force: Boolean) {
             if (WidgetData.isInverter(key)) {
                 val d = WidgetData.inverterDevice(key) ?: return
                 val repo = IotApp.instance.inverters
@@ -282,7 +298,7 @@ abstract class BaseWidget : AppWidgetProvider() {
         }
 
         /** Оновити дані пристроїв, якщо застаріли, і перемалювати віджети. */
-        private fun refreshStale(ctx: Context, keys: List<String>, then: () -> Unit) {
+        fun refreshStale(ctx: Context, keys: List<String>, then: () -> Unit) {
             CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                 try {
                     keys.forEach { k -> refreshKey(k, force = false) }
@@ -330,14 +346,20 @@ abstract class BaseWidget : AppWidgetProvider() {
                 val key = intent.getStringExtra(EXTRA_KEY) ?: return
                 val widgetId = intent.getIntExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, -1)
                 val mgr = AppWidgetManager.getInstance(context)
-                if (widgetId != -1) render(context, mgr, widgetId, sizeOf(context, widgetId), busy = true)
+                val isGroup = widgetId != -1 && GroupWidget.groupOf(context, widgetId) != null
+                if (widgetId != -1) {
+                    if (isGroup) GroupWidget.render(context, mgr, widgetId, busyKey = key)
+                    else render(context, mgr, widgetId, sizeOf(context, widgetId), busy = true)
+                }
                 val pending = goAsync()
                 CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
                     try {
                         val c = IotApp.instance.controller
                         val dev = IotApp.instance.storage.device(key)
-                        val w = if (widgetId != -1) WidgetData.load(context, widgetId) else null
-                        if (WidgetData.isInverter(key)) {
+                        val w = if (widgetId != -1 && !isGroup) WidgetData.load(context, widgetId) else null
+                        if (key == GroupWidget.GROUP_REFRESH) {
+                            WidgetData.load(context, widgetId)?.items?.forEach { refreshKey(it.key, force = true) }
+                        } else if (WidgetData.isInverter(key)) {
                             refreshKey(key, force = true)
                         } else if (action == ACTION_REFRESH || dev == null) {
                             c.refreshOnce(key)

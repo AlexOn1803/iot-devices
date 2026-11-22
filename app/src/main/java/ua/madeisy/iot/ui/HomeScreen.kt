@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Thermostat
+import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ListItem
@@ -66,6 +67,7 @@ fun HomeScreen(nav: Nav) {
     val inverters by app.inverters.devices.collectAsState()
     val invStates by app.inverters.states.collectAsState()
     var addChooser by remember { mutableStateOf(false) }
+    var groupWidget by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -74,6 +76,8 @@ fun HomeScreen(nav: Nav) {
             TopAppBar(
                 title = { Text("Мої пристрої") },
                 actions = {
+                    if (devices.isNotEmpty() || inverters.isNotEmpty())
+                        IconButton(onClick = { groupWidget = true }) { Icon(Icons.Filled.Widgets, "Віджет на кілька пристроїв") }
                     IconButton(onClick = { nav.push(Screen.Thermostats) }) { Icon(Icons.Filled.Thermostat, "Термостати") }
                     IconButton(onClick = { nav.push(Screen.Settings) }) { Icon(Icons.Filled.Settings, "Налаштування") }
                 }
@@ -94,7 +98,14 @@ fun HomeScreen(nav: Nav) {
         if (devices.isEmpty() && inverters.isEmpty()) {
             EmptyState(Modifier.padding(pad), nav)
         } else {
+            PullRefresh(Modifier.fillMaxSize(), onRefresh = {
+                kotlinx.coroutines.coroutineScope {
+                    devices.forEach { d -> launch { app.controller.refreshOnce(d.key) } }
+                    inverters.forEach { d -> launch { app.inverters.refresh(d) } }
+                }
+            }) {
             LazyColumn(
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = pad.calculateTopPadding() + 8.dp, bottom = pad.calculateBottomPadding() + 88.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -126,9 +137,11 @@ fun HomeScreen(nav: Nav) {
                     )
                 }
             }
+            }
         }
     }
     if (addChooser) AddChooser(nav) { addChooser = false }
+    if (groupWidget) ua.madeisy.iot.widget.PinGroupWidgetDialog { groupWidget = false }
 }
 
 @Composable

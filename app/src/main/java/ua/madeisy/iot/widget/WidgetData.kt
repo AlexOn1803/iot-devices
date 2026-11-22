@@ -33,9 +33,16 @@ data class WidgetCfg(
     val deviceKey: String,
     val toggle: Int = AUTO,
     val metrics: List<String> = emptyList(),
+    /** Віджет на кілька пристроїв: які пристрої (у порядку) і що показувати для кожного. */
+    val items: List<GroupItem> = emptyList(),
+    val title: String = "",
 ) {
     fun toJson(): String = JSONObject().put("device", deviceKey).put("toggle", toggle)
-        .put("metrics", JSONArray(metrics)).toString()
+        .put("metrics", JSONArray(metrics))
+        .apply {
+            if (items.isNotEmpty()) put("items", JSONArray().apply { items.forEach { put(it.toJson()) } })
+            if (title.isNotBlank()) put("title", title)
+        }.toString()
 
     companion object {
         const val AUTO = -2
@@ -48,8 +55,25 @@ data class WidgetCfg(
             return runCatching {
                 val j = JSONObject(s)
                 val arr = j.optJSONArray("metrics") ?: JSONArray()
-                WidgetCfg(j.getString("device"), j.optInt("toggle", AUTO), (0 until arr.length()).map { arr.getString(it) })
+                val itemsArr = j.optJSONArray("items") ?: JSONArray()
+                WidgetCfg(
+                    j.getString("device"), j.optInt("toggle", AUTO), (0 until arr.length()).map { arr.getString(it) },
+                    (0 until itemsArr.length()).mapNotNull { i -> itemsArr.optJSONObject(i)?.let(GroupItem::fromJson) },
+                    j.optString("title"),
+                )
             }.getOrNull()
+        }
+    }
+}
+
+/** Пристрій у віджеті на кілька пристроїв. [metrics] порожній — типові дані. */
+data class GroupItem(val key: String, val metrics: List<String> = emptyList()) {
+    fun toJson(): JSONObject = JSONObject().put("key", key).put("metrics", JSONArray(metrics))
+
+    companion object {
+        fun fromJson(o: JSONObject): GroupItem {
+            val a = o.optJSONArray("metrics") ?: JSONArray()
+            return GroupItem(o.getString("key"), (0 until a.length()).map { a.getString(it) })
         }
     }
 }
@@ -201,6 +225,31 @@ object WidgetData {
 
     fun hasToggle(cfg: DeviceConfig, w: WidgetCfg): Boolean =
         w.toggle != WidgetCfg.NONE && (!cfg.isEsp || toggleComp(cfg, w) != null || IotApp.instance.controller.espState(cfg.key).comps.isEmpty())
+
+    /** Назва пристрою за ключем віджета (розетка, плата чи інвертор). */
+    fun nameOf(key: String): String? =
+        if (isInverter(key)) inverterDevice(key)?.alias else IotApp.instance.storage.device(key)?.name
+
+    /** Усі метрики пристрою за ключем (розетка/плата/інвертор). */
+    fun metricsFor(key: String): List<Metric> {
+        if (isInverter(key)) return inverterMetrics(key)
+        val d = IotApp.instance.storage.device(key) ?: return emptyList()
+        return available(d)
+    }
+
+    fun defaultsFor(key: String, all: List<Metric> = metricsFor(key)): List<Metric> {
+        if (isInverter(key)) return inverterDefaults(all)
+        val d = IotApp.instance.storage.device(key) ?: return all
+        return defaults(d, all)
+    }
+
+    /** Вибрані (або типові) метрики пристрою, не більше [n]. */
+    fun itemMetrics(item: GroupItem, n: Int): List<Metric> {
+        val all = metricsFor(item.key)
+        val chosen = if (item.metrics.isNotEmpty()) item.metrics.mapNotNull { id -> all.firstOrNull { it.id == id } }
+        else defaultsFor(item.key, all)
+        return chosen.take(n)
+    }
 
     // ---- збереження ----
     private const val PREFS = "widgets"

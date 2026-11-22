@@ -139,8 +139,9 @@ fun EspDeviceScreen(key: String, nav: Nav) {
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { pad ->
+        PullRefresh(Modifier.padding(pad).fillMaxSize(), onRefresh = { app.controller.refreshOnce(key) }) {
         Column(
-            Modifier.padding(pad).fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             EspStatusLine(cfg, s)
@@ -160,6 +161,7 @@ fun EspDeviceScreen(key: String, nav: Nav) {
             }
             if (s.comps.any { it.type == EspType.RELAY }) SchedulesCard(key)
             Spacer(Modifier.height(24.dp))
+        }
         }
     }
 }
