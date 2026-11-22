@@ -191,6 +191,7 @@ jobs:
           - **iot-<плата>-full.bin** — прошивка для першого запису по USB з адреси 0x0 (додаток прошиває сам через USB-OTG).
           - **iot-<плата>-ota.bin** — для оновлення по Wi-Fi.
           - Плати: esp32c3, esp32, esp32s3, esp32s2, esp8266 (Wemos D1 mini, NodeMCU), esp01 (ESP-01/01S)."
+          gh release edit latest --draft=false --latest || true
 
   beta:
     # гілка dev — бета-канал: окремий реліз «beta», стабільний «latest» не чіпаємо
@@ -216,3 +217,6 @@ jobs:
             --notes "Бета-версія з гілки dev (коміт ${{ github.sha }}). Встановлюється поверх стабільної, дані зберігаються.
 
           Повернутись на стабільну: видалити додаток і встановити iot-devices.apk з релізу latest (Android не дозволяє ставити старішу версію поверх новішої)."
+          # новіші версії gh інколи лишають реліз чернеткою — публікуємо явно
+          gh release edit beta --draft=false --prerelease || true
+          gh release view beta --json isDraft --jq '.isDraft' | grep -q false
