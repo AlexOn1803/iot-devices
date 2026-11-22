@@ -157,8 +157,9 @@ abstract class BaseWidget : AppWidgetProvider() {
 
             views.setOnClickPendingIntent(R.id.w_toggle, action(ctx, ACTION_TOGGLE, dev.key, id))
             if (size != WidgetSize.SMALL) views.setOnClickPendingIntent(R.id.w_refresh, action(ctx, ACTION_REFRESH, dev.key, id))
-            // з кнопкою: натиск на віджет лише оновлює стан; без кнопки — відкриває пристрій
-            views.setOnClickPendingIntent(R.id.w_root, if (hasToggle) action(ctx, ACTION_REFRESH, dev.key, id) else openApp(ctx, dev.key))
+            // натиск на віджет оновлює стан; відкрити пристрій — натиском на його назву
+            views.setOnClickPendingIntent(R.id.w_root, action(ctx, ACTION_REFRESH, dev.key, id))
+            views.setOnClickPendingIntent(R.id.w_name, openApp(ctx, dev.key))
             mgr.updateAppWidget(id, views)
         }
 
@@ -218,7 +219,8 @@ abstract class BaseWidget : AppWidgetProvider() {
                 WidgetSize.LARGE -> fillLarge(views, metrics, status)
             }
             if (size != WidgetSize.SMALL) views.setOnClickPendingIntent(R.id.w_refresh, action(ctx, ACTION_REFRESH, w.deviceKey, id))
-            views.setOnClickPendingIntent(R.id.w_root, openApp(ctx, w.deviceKey))
+            views.setOnClickPendingIntent(R.id.w_root, action(ctx, ACTION_REFRESH, w.deviceKey, id))
+            views.setOnClickPendingIntent(R.id.w_name, openApp(ctx, w.deviceKey))
             mgr.updateAppWidget(id, views)
         }
 

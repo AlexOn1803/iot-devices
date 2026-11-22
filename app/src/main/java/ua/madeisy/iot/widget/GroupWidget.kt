@@ -106,7 +106,7 @@ abstract class GroupWidget : BaseWidget() {
                 row.setTextViewText(
                     R.id.r_main,
                     when {
-                        busyKey == key -> "…"
+                        busyKey == key || busyKey == GROUP_REFRESH -> "…"
                         main != null -> main.value
                         on != null -> if (on) "Увімк." else "Вимк."
                         else -> "—"
@@ -124,7 +124,7 @@ abstract class GroupWidget : BaseWidget() {
                 row.setTextViewTextSize(R.id.r_main, android.util.TypedValue.COMPLEX_UNIT_SP, if (rowDp < 52) 14f else 17f)
                 if (rowDp < 44) {
                     // зовсім тісно: назва й значення в один рядок, без додаткових
-                    row.setTextViewText(R.id.r_name, name + "  " + (if (busyKey == key) "…" else main?.value ?: on?.let { if (it) "Увімк." else "Вимк." } ?: "—"))
+                    row.setTextViewText(R.id.r_name, name + "  " + (if (busyKey == key || busyKey == GROUP_REFRESH) "…" else main?.value ?: on?.let { if (it) "Увімк." else "Вимк." } ?: "—"))
                     row.setViewVisibility(R.id.r_main, View.GONE)
                     row.setViewVisibility(R.id.r_extra, View.GONE)
                     row.setViewVisibility(R.id.r_extra_multi, View.GONE)
@@ -139,11 +139,8 @@ abstract class GroupWidget : BaseWidget() {
                 row.setViewVisibility(R.id.r_toggle, if (toggle) View.VISIBLE else View.GONE)
                 row.setImageViewResource(R.id.r_toggle, if (on == true) R.drawable.widget_btn_on else R.drawable.widget_btn_off)
                 if (toggle) row.setOnClickPendingIntent(R.id.r_toggle, BaseWidget.action(ctx, BaseWidget.ACTION_TOGGLE, key, id))
-                // з кнопкою: натиск на рядок лише оновлює стан; без кнопки — відкриває пристрій
-                row.setOnClickPendingIntent(
-                    R.id.r_root,
-                    if (toggle) BaseWidget.action(ctx, BaseWidget.ACTION_REFRESH, key, id) else BaseWidget.openApp(ctx, key),
-                )
+                // натиск на будь-який рядок оновлює одразу всі пристрої віджета
+                row.setOnClickPendingIntent(R.id.r_root, BaseWidget.action(ctx, BaseWidget.ACTION_REFRESH, GROUP_REFRESH, id))
                 views.addView(R.id.w_rows, row)
             }
             val stale = oldest != Long.MAX_VALUE && System.currentTimeMillis() - oldest > 10 * 60_000
