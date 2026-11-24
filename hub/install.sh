@@ -76,9 +76,11 @@ set_conf() {  # set_conf '<jq filter>' [--arg k v ...]
 say "MQTT-брокер для плат ESP (Mosquitto на Pi)"
 MQ_PASS=$(jq -r '.mqtt.pass // ""' "$CONF")
 [ -n "$MQ_PASS" ] || MQ_PASS=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
-mosquitto_passwd -b -c /etc/mosquitto/iot-hub.passwd iot "$MQ_PASS"
-chown root:root /etc/mosquitto/iot-hub.passwd
-chmod 600 /etc/mosquitto/iot-hub.passwd
+# власник root (вимога нових версій Mosquitto), група mosquitto — щоб брокер міг прочитати файл
+PWTMP=$(mktemp)
+mosquitto_passwd -b -c "$PWTMP" iot "$MQ_PASS" 2>/dev/null
+install -o root -g mosquitto -m 640 "$PWTMP" /etc/mosquitto/iot-hub.passwd
+rm -f "$PWTMP"
 cat > /etc/mosquitto/conf.d/iot-hub.conf <<'EOF'
 # брокер для плат ESP у домашній мережі (лише з паролем)
 listener 1883
@@ -86,7 +88,9 @@ allow_anonymous false
 password_file /etc/mosquitto/iot-hub.passwd
 EOF
 systemctl enable -q mosquitto
-systemctl restart mosquitto
+if ! systemctl restart mosquitto; then
+  echo "Mosquitto не запустився:"; journalctl -u mosquitto -n 15 --no-pager; exit 1
+fi
 systemctl stop iot-hub
 set_conf '.mqtt = {"host":"127.0.0.1","port":1883,"user":"iot","pass":$p}' --arg p "$MQ_PASS"
 systemctl start iot-hub
