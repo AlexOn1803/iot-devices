@@ -77,7 +77,7 @@ say "MQTT-брокер для плат ESP (Mosquitto на Pi)"
 MQ_PASS=$(jq -r '.mqtt.pass // ""' "$CONF")
 [ -n "$MQ_PASS" ] || MQ_PASS=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
 mosquitto_passwd -b -c /etc/mosquitto/iot-hub.passwd iot "$MQ_PASS"
-chown mosquitto:mosquitto /etc/mosquitto/iot-hub.passwd 2>/dev/null || true
+chown root:root /etc/mosquitto/iot-hub.passwd
 chmod 600 /etc/mosquitto/iot-hub.passwd
 cat > /etc/mosquitto/conf.d/iot-hub.conf <<'EOF'
 # брокер для плат ESP у домашній мережі (лише з паролем)
@@ -177,12 +177,28 @@ if [ -z "$RELAY" ] || [ "${IOTHUB_REDEPLOY:-}" = 1 ]; then
   echo "Потрібен API-токен Cloudflare з правом «Edit Cloudflare Workers»:"
   echo "  dash.cloudflare.com → My Profile → API Tokens → Create Token → шаблон «Edit Cloudflare Workers»"
   echo "Токен використовується лише зараз і ніде не зберігається. Enter — пропустити (лише вдома)."
-  read -r -s -p "API-токен: " CF_TOKEN < /dev/tty || CF_TOKEN=""
-  echo
-  if [ -n "$CF_TOKEN" ]; then
+  echo "Вставка: права кнопка миші (у PuTTY/Windows Terminal) або Ctrl+Shift+V. Символи не відображаються — так і має бути."
+  CF_TOKEN=""; ACC=""
+  for TRY in 1 2 3; do
+    read -r -s -p "API-токен: " CF_TOKEN < /dev/tty || CF_TOKEN=""
+    echo
+    CF_TOKEN=$(printf '%s' "$CF_TOKEN" | tr -d '[:space:]')
+    [ -n "$CF_TOKEN" ] || break
+    echo "Отримано символів: ${#CF_TOKEN}"
+    if printf '%s' "$CF_TOKEN" | LC_ALL=C grep -q '[^A-Za-z0-9_-]'; then
+      echo "У токені є зайві символи (інша розкладка?). Скопіюй його ще раз кнопкою копіювання в Cloudflare."
+      continue
+    fi
     H=(-H "Authorization: Bearer $CF_TOKEN")
-    ACC=$(curl -fsS "${H[@]}" "$CF_API/accounts" | jq -r '.result[0].id')
-    [ -n "$ACC" ] && [ "$ACC" != null ] || { echo "Не вдалося отримати акаунт — перевір токен"; exit 1; }
+    ACC=$(curl -sS "${H[@]}" "$CF_API/accounts" | jq -r '.result[0].id // empty' 2>/dev/null || true)
+    [ -n "$ACC" ] && break
+    echo "Cloudflare не прийняв токен (спроба $TRY з 3). Перевір, що скопійовано весь токен."
+  done
+  if [ -n "$CF_TOKEN" ] && [ -z "$ACC" ]; then
+    echo "Пропускаю доступ поза домом. Повторити пізніше: curl -fsSL $RAW/hub/install.sh | sudo IOTHUB_REDEPLOY=1 bash"
+    CF_TOKEN=""
+  fi
+  if [ -n "$CF_TOKEN" ]; then
     META='{"main_module":"index.js","compatibility_date":"2025-09-01","bindings":[{"type":"durable_object_namespace","name":"ROOM","class_name":"Room"}]'
     if ! curl -fsS "${H[@]}" "$CF_API/accounts/$ACC/workers/scripts/iot-hub/settings" >/dev/null 2>&1; then
       META="$META,\"migrations\":{\"new_tag\":\"v1\",\"new_sqlite_classes\":[\"Room\"]}"
