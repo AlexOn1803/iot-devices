@@ -280,7 +280,7 @@ class EspWorker:
         self.kick.set()   # перевірити через HTTP
 
     async def provision(self, s):
-        """Налаштувати плату на брокер Pi (замість хмарного), якщо ще не налаштована."""
+        """Додати плату брокер Pi як основний (хмарний лишається резервом), якщо ще не налаштовано."""
         mq = self.hub.cfg.data.get("mqtt") or {}
         ip = lan_ip()
         if not mq.get("user") or not ip or not self.cfg.get("apiKey"):
@@ -288,10 +288,17 @@ class EspWorker:
         try:
             async with s.get(self.base() + "/api/info", headers=self.headers()) as r:
                 info = await r.json(content_type=None)
-            if info.get("mqttHost") == ip:
+            if "mqttLocal" not in info:
+                # стара прошивка знає лише один брокер — не забираємо в неї хмарний резерв;
+                # Pi опитує таку плату напряму по Wi-Fi
+                self.provisioned = True
+                log.info("esp %s: old firmware, keeping its cloud broker (update firmware for instant updates)", self.key)
+                return
+            if info.get("mqttLocal") == ip:
                 self.provisioned = True
                 return
-            body = {"host": ip, "port": mq.get("port", 1883), "user": mq["user"], "pass": mq["pass"]}
+            # брокер Pi — основний, хмарний на платі лишається резервом
+            body = {"slot": "local", "host": ip, "port": mq.get("port", 1883), "user": mq["user"], "pass": mq["pass"]}
             async with s.post(self.base() + "/api/mqtt", headers=self.headers(), json=body) as r:
                 if r.status < 300:
                     self.provisioned = True

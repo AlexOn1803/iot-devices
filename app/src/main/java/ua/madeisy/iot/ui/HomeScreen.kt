@@ -119,13 +119,13 @@ fun HomeScreen(nav: Nav) {
             ) {
                 if (hubSettings.configured && !hubStatus.connected) item(key = "pi-off") {
                     androidx.compose.material3.Card(
-                        colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = androidx.compose.material3.MaterialTheme.colorScheme.errorContainer),
+                        colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = androidx.compose.material3.MaterialTheme.colorScheme.tertiaryContainer),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Column(Modifier.padding(16.dp)) {
                             Text(if (hubStatus.connecting) "Підключення до Raspberry Pi…" else "Raspberry Pi недоступна",
                                 style = androidx.compose.material3.MaterialTheme.typography.titleSmall)
-                            Text(hubStatus.error ?: "Керування пристроями — лише через Pi. Перевір, чи вона увімкнена й має інтернет.",
+                            Text("Резерв: керую напряму та через хмару з телефона. Правила виконує лише сама Pi.",
                                 style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
                         }
                     }

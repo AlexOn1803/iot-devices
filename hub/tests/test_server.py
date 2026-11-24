@@ -41,12 +41,16 @@ async def main():
     pub.connect("127.0.0.1", 17883); pub.subscribe("iotdev/abc123/set"); pub.loop_start()
 
     async def state(req): return web.json_response(esp)
-    async def info(req): return web.json_response({"mqttHost": "127.0.0.1"})
+    provisioned = []
+    async def info(req): return web.json_response({"mqttHost": "cloud.example", "mqttLocal": ""})
+    async def set_mqtt(req):
+        provisioned.append(await req.json()); return web.json_response({})
     app = web.Application(); app.router.add_get("/api/state", state); app.router.add_get("/api/info", info)
+    app.router.add_post("/api/mqtt", set_mqtt)
     r = web.AppRunner(app); await r.setup(); await web.TCPSite(r, "127.0.0.1", 17710).start()
 
     d = tempfile.mkdtemp()
-    json.dump({"token": "t" * 32, "mqtt": {"host": "127.0.0.1", "port": 17883}}, open(d + "/config.json", "w"))
+    json.dump({"token": "t" * 32, "mqtt": {"host": "127.0.0.1", "port": 17883, "user": "iot", "pass": "pw"}}, open(d + "/config.json", "w"))
     hub = subprocess.Popen([sys.executable, os.path.join(ROOT, "hub/iothub.py")],
                            env=dict(os.environ, IOTHUB_CONFIG=d + "/config.json", IOTHUB_PORT="17720"))
     procs.append(hub)
@@ -92,6 +96,8 @@ async def main():
                 j = await until(lambda j: j["t"] == "state" and j["key"] == "esp" and j["state"].get("via") == "mqtt"
                                 and j["state"]["state"]["comps"][0]["on"] is True)
                 check("стан плати прийшов через MQTT", j)
+                check("плата отримала брокер Pi як основний (хмарний — резерв)",
+                      any(p.get("slot") == "local" and p.get("user") == "iot" for p in provisioned))
                 # команда — через MQTT із ключем плати
                 t0 = time.time()
                 await ws.send_str(json.dumps({"t": "switch", "id": 2, "key": "esp", "on": False}))

@@ -151,7 +151,7 @@ class InverterRepo(context: Context) {
         } else update(sn) { it.copy(loading = false, error = st.optString("error").ifBlank { "Хаб не отримав дані" }) }
     }
 
-    private fun hubManages(sn: String) = runCatching { ua.madeisy.iot.IotApp.instance.controller.hubMode() }.getOrDefault(false)
+    private fun hubManages(sn: String) = runCatching { ua.madeisy.iot.IotApp.instance.controller.hubLive() }.getOrDefault(false)
 
     suspend fun refresh(d: EssDevice) {
         val a = _account.value
