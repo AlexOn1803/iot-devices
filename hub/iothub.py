@@ -95,6 +95,10 @@ class Config:
 
 # ---------------------------------------------------------------- Tuya
 
+class SoftClose(IOError):
+    """Розетка закрила з'єднання — перепідключаємось одразу, це не збій."""
+
+
 class TuyaWorker:
     """Одна розетка: постійне з'єднання в окремому потоці, події — в asyncio."""
 
@@ -113,11 +117,17 @@ class TuyaWorker:
 
     def command(self, dps: dict):
         with self.lock:
-            self.cmds.append(dps)
+            self.cmds.append((dps, time.time()))
+            # одразу показуємо новий стан у додатку й панелі; розетка підтвердить своїм повідомленням
+            self.state["dps"].update({str(k): v for k, v in dps.items()})
+        self.publish()
         try:
             os.write(self.wake_w, b"x")   # будимо потік, щоб команда пішла одразу
         except OSError:
             pass
+
+    def _sent(self, t0):
+        log.info("tuya %s: command sent in %d ms", self.key, (time.time() - t0) * 1000)
 
     def publish(self, **changes):
         self.state.update(changes)
@@ -166,9 +176,11 @@ class TuyaWorker:
                 d.set_socketPersistent(False)
                 with self.lock:
                     cmds, self.cmds = self.cmds, []
-                for dps in cmds:
+                for dps, t0 in cmds:
                     d.set_multiple_values({str(k): v for k, v in dps.items()}, nowait=True)
-                    self.state["dps"].update({str(k): v for k, v in dps.items()})
+                    self._sent(t0)
+                if cmds:
+                    self.publish(online=True, error=None)
                 st = d.status()
                 if not st or "dps" not in st:
                     raise IOError((st or {}).get("Error", "немає відповіді"))
@@ -205,13 +217,19 @@ class TuyaWorker:
                 while not self.stop.is_set():
                     with self.lock:
                         cmds, self.cmds = self.cmds, []
-                    for dps in cmds:
-                        r = d.set_multiple_values({str(k): v for k, v in dps.items()}, nowait=False)
-                        if isinstance(r, dict) and "dps" in r:
-                            self.state["dps"].update(r["dps"])
-                        else:
-                            self.state["dps"].update({str(k): v for k, v in dps.items()})
-                        self.publish(online=True, error=None)
+                    if cmds and getattr(d, "socket", None) is None:
+                        with self.lock:
+                            self.cmds[:0] = cmds   # з'єднання вже закрите — надішлемо одразу після перепідключення
+                        raise SoftClose("з'єднання закрито")
+                    for i, (dps, t0) in enumerate(cmds):
+                        # не чекаємо відповіді (до 5 с у частини розеток) — вона прийде через receive() нижче
+                        try:
+                            d.set_multiple_values({str(k): v for k, v in dps.items()}, nowait=True)
+                        except Exception:
+                            with self.lock:
+                                self.cmds[:0] = cmds[i:]
+                            raise
+                        self._sent(t0)
                     if time.time() - last_hb > 9:
                         d.heartbeat(nowait=True)
                         last_hb = time.time()
@@ -225,7 +243,7 @@ class TuyaWorker:
                     # чекаємо або даних від розетки, або команди (через pipe) — без затримок
                     sock = getattr(d, "socket", None)
                     if sock is None:
-                        raise IOError("з'єднання закрито")
+                        raise SoftClose("з'єднання закрито")
                     r, _, _ = select.select([sock, self.wake_r], [], [], 1.0)
                     if self.wake_r in r:
                         try:
@@ -242,6 +260,10 @@ class TuyaWorker:
                         # 904 — «нічого не прийшло», це нормально
                         if data.get("Err") in ("901", "905", "914"):
                             raise IOError(data["Error"])
+            except SoftClose as e:
+                # розетка просто закрила з'єднання: одразу знову, стан «онлайн» не чіпаємо
+                log.debug("tuya %s: %s", self.key, e)
+                self.stop.wait(0.2)
             except Exception as e:
                 fails += 1
                 log.info("tuya %s: %s", self.key, e)
@@ -249,7 +271,16 @@ class TuyaWorker:
                 if fails >= 3:
                     self.cfg["ip"] = ""   # можливо, змінилась IP — шукаємо заново
                     fails = 0
-                self.stop.wait(min(30, 2 * fails + 3))
+                # пауза перед новою спробою, але команда з додатка перериває її — пробуємо одразу
+                with self.lock:
+                    pending = bool(self.cmds)
+                if not pending:
+                    r, _, _ = select.select([self.wake_r], [], [], 1 if fails == 1 else min(30, 3 * fails))
+                    if r:
+                        try:
+                            os.read(self.wake_r, 64)
+                        except OSError:
+                            pass
 
 
 # ---------------------------------------------------------------- ESP
