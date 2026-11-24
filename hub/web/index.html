@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>IoT Хаб</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #1a1d24; --card2: #222632; --text: #eef0f4; --sub: #9aa1ad;
+    --accent: #7aa2ff; --on: #2fbf71; --off: #3a3f4b; --warn: #ff6b6b; --radius: 18px;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not(.kiosk) { --bg: #f3f4f7; --card: #fff; --card2: #eef0f5; --text: #15171c; --sub: #5d6470; --off: #cfd3dc; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 16px 20px 8px; }
+  header h1 { font-size: 22px; margin: 0; flex: 1; font-weight: 600; }
+  .pill { font-size: 13px; color: var(--sub); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); margin-right: 6px; }
+  .dot.ok { background: var(--on); }
+  button { font: inherit; color: inherit; background: var(--card2); border: 0; border-radius: 12px; padding: 8px 14px; cursor: pointer; }
+  button.ghost { background: transparent; color: var(--sub); }
+  main { padding: 8px 16px 32px; display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+  .kiosk main { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; }
+  .card { background: var(--card); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-height: 120px; }
+  .card.on { outline: 2px solid color-mix(in srgb, var(--on) 55%, transparent); }
+  .head { display: flex; align-items: center; gap: 10px; }
+  .name { font-weight: 600; font-size: 17px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status { font-size: 13px; color: var(--sub); }
+  .status.bad { color: var(--warn); }
+  .big { font-size: 34px; font-weight: 600; letter-spacing: -0.5px; }
+  .row { display: flex; gap: 18px; flex-wrap: wrap; }
+  .stat { display: flex; flex-direction: column; min-width: 70px; }
+  .stat b { font-size: 20px; font-weight: 600; }
+  .stat span { font-size: 12px; color: var(--sub); }
+  .toggle { width: 64px; height: 38px; border-radius: 19px; background: var(--off); position: relative; flex: none; transition: background .15s; }
+  .toggle::after { content: ""; position: absolute; top: 4px; left: 4px; width: 30px; height: 30px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .toggle.on { background: var(--on); }
+  .toggle.on::after { left: 30px; }
+  .toggle.busy { opacity: .5; }
+  .comp { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--card2); }
+  .comp:first-of-type { border-top: 0; }
+  .comp .label { flex: 1; }
+  .edit { display: flex; gap: 6px; }
+  section.rules { padding: 0 20px 32px; }
+  section.rules h2 { font-size: 18px; font-weight: 600; margin: 8px 0; }
+  .rule { background: var(--card); border-radius: 14px; padding: 12px 14px; margin-bottom: 8px; display: flex; gap: 12px; align-items: center; }
+  .rule .t { flex: 1; }
+  .rule .s { font-size: 12px; color: var(--accent); }
+  #login { max-width: 320px; margin: 18vh auto; text-align: center; display: none; }
+  #login input { font: 28px/1 monospace; letter-spacing: 8px; text-align: center; width: 100%; padding: 12px; border-radius: 12px; border: 0; background: var(--card); color: var(--text); margin: 16px 0; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--card2); padding: 10px 16px; border-radius: 12px; display: none; max-width: 90vw; }
+  .empty { color: var(--sub); padding: 24px; }
+</style>
+</head>
+<body>
+<div id="login">
+  <h2>IoT Хаб</h2>
+  <p class="pill">Введи PIN-код хаба (його показала команда встановлення, або виконай на Pi: <code>sudo iot-hub-pin</code>)</p>
+  <input id="pin" inputmode="numeric" maxlength="6" autocomplete="one-time-code">
+  <button id="loginBtn">Увійти</button>
+  <p id="loginErr" class="status bad"></p>
+</div>
+<div id="app" style="display:none">
+  <header>
+    <h1 id="title">Мої пристрої</h1>
+    <span class="pill"><span id="conn" class="dot"></span><span id="connText">підключення…</span></span>
+    <button id="editBtn" class="ghost">Налаштувати</button>
+  </header>
+  <main id="grid"></main>
+  <section class="rules" id="rulesBox"></section>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const qs = new URLSearchParams(location.search);
+if (qs.has("kiosk")) document.documentElement.classList.add("kiosk");
+let ws, devices = [], states = {}, dash = {}, rules = [], armed = [], rstatus = {}, editing = false, reqId = 1;
+const busy = new Set();
+
+const $ = (id) => document.getElementById(id);
+function toast(t) { const e = $("toast"); e.textContent = t; e.style.display = "block"; clearTimeout(toast.h); toast.h = setTimeout(() => e.style.display = "none", 3500); }
+function fmtW(v) { if (v == null) return "—"; return Math.abs(v) >= 1000 ? (v / 1000).toFixed(2) + " кВт" : Math.round(v) + " Вт"; }
+function fmt(v, unit, d = 1) { return v == null ? "—" : (Number.isInteger(v) ? v : v.toFixed(d)) + (unit ? " " + unit : ""); }
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => { $("conn").className = "dot ok"; $("connText").textContent = "хаб на зв'язку"; };
+  ws.onclose = () => {
+    $("conn").className = "dot"; $("connText").textContent = "немає зв'язку";
+    fetch("/ws").then((r) => { if (r.status === 401) showLogin(); else setTimeout(connect, 2000); }).catch(() => setTimeout(connect, 3000));
+  };
+  ws.onmessage = (e) => {
+    if (e.data === "pong") return;
+    const m = JSON.parse(e.data);
+    if (m.t === "hello") { devices = m.devices || []; dash = m.dash || {}; $("connText").dataset.hub = m.name || ""; render(); }
+    else if (m.t === "snapshot") { states = m.states || {}; render(); }
+    else if (m.t === "state") { states[m.key] = m.state; busy.delete(m.key); renderCard(m.key); }
+    else if (m.t === "rules") { rules = m.rules || []; armed = m.armed || []; rstatus = m.status || {}; renderRules(); }
+    else if (m.t === "rule_status") { rstatus[m.id] = m.status; armed = m.armed || armed; renderRules(); }
+    else if (m.t === "ack" && !m.ok) toast(m.error || "Помилка");
+    else if (m.t === "notify") toast(`${m.title}: ${m.text}`);
+  };
+}
+function send(m) { if (ws && ws.readyState === 1) { m.id = reqId++; ws.send(JSON.stringify(m)); } else toast("Немає зв'язку з хабом"); }
+
+function showLogin() { $("app").style.display = "none"; $("login").style.display = "block"; $("pin").focus(); }
+$("loginBtn").onclick = async () => {
+  const r = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pin: $("pin").value }) });
+  if (r.ok) { $("login").style.display = "none"; $("app").style.display = "block"; connect(); }
+  else $("loginErr").textContent = (await r.json().catch(() => ({}))).error || "Помилка";
+};
+$("pin").addEventListener("keydown", (e) => { if (e.key === "Enter") $("loginBtn").click(); });
+
+// ---- порядок і приховані (налаштовується тут або з телефона)
+function ordered() {
+  const order = dash.order || [], hidden = new Set(dash.hidden || []);
+  const list = [...devices].sort((a, b) => {
+    const ia = order.indexOf(a.key), ib = order.indexOf(b.key);
+    return (ia < 0 ? 1e6 : ia) - (ib < 0 ? 1e6 : ib);
+  });
+  return editing ? list : list.filter((d) => !hidden.has(d.key));
+}
+$("editBtn").onclick = () => { editing = !editing; $("editBtn").textContent = editing ? "Готово" : "Налаштувати"; if (!editing) saveDash(); render(); };
+function saveDash() { send({ t: "dash_set", dash }); }
+function move(key, dir) {
+  const keys = ordered().map((d) => d.key); const i = keys.indexOf(key), j = i + dir;
+  if (j < 0 || j >= keys.length) return; [keys[i], keys[j]] = [keys[j], keys[i]]; dash.order = keys; render();
+}
+function hide(key) { const h = new Set(dash.hidden || []); h.has(key) ? h.delete(key) : h.add(key); dash.hidden = [...h]; render(); }
+
+function render() {
+  const g = $("grid"); g.innerHTML = "";
+  const list = ordered();
+  if (!list.length) { g.innerHTML = `<div class="empty">Пристроїв ще немає. Додай їх у додатку на телефоні — вони з'являться тут.</div>`; return; }
+  for (const d of list) { const c = document.createElement("div"); c.className = "card"; c.id = "c_" + d.key; g.appendChild(c); renderCard(d.key); }
+}
+
+function toggleBtn(key, on, comp) {
+  return `<div class="toggle ${on ? "on" : ""} ${busy.has(key) ? "busy" : ""}" data-key="${esc(key)}" data-comp="${comp ?? -1}" data-on="${on ? 1 : 0}"></div>`;
+}
+document.addEventListener("click", (e) => {
+  const t = e.target.closest(".toggle"); if (!t || !t.dataset.key) return;   // перемикачі правил — окремо
+  busy.add(t.dataset.key); t.classList.add("busy");
+  send({ t: "switch", key: t.dataset.key, on: t.dataset.on !== "1", comp: Number(t.dataset.comp) });
+  setTimeout(() => { if (busy.delete(t.dataset.key)) renderCard(t.dataset.key); }, 5000);
+});
+
+function tuyaVals(st) {
+  // хаб рахує значення сам (знає номери DP і масштаби кожної розетки)
+  const v = (st && st.vals) || {};
+  return { on: v.on === true, power: v.power ?? null, voltage: v.voltage ?? null, current: v.current ?? null };
+}
+
+function invSummary(pts) {
+  const m = {}; for (const p of pts) m[String(p.title).toLowerCase().replace(/\s+/g, " ").trim()] = p;
+  const n = (...ks) => { for (const k of ks) if (m[k] && !isNaN(parseFloat(m[k].val))) return parseFloat(m[k].val); return null; };
+  const w = (...ks) => { for (const k of ks) if (m[k] && !isNaN(parseFloat(m[k].val))) return parseFloat(m[k].val) * (String(m[k].unit).toLowerCase() === "kw" ? 1000 : 1); return null; };
+  let pv = w("pv total power", "pv power", "total pv power", "pv input power", "solar power");
+  if (pv == null) { const parts = Object.keys(m).filter((k) => /^pv\d (input |charging |charger )?power$/.test(k)).map((k) => w(k)).filter((x) => x != null); pv = parts.length ? parts.reduce((a, b) => a + b, 0) : null; }
+  const gridV = n("ac input voltage", "grid voltage", "mains voltage");
+  const modeRaw = ["working state", "operating mode", "work state", "work mode", "mode"].map((k) => m[k] && m[k].val).find((v) => v);
+  const ml = String(modeRaw || "").toLowerCase();
+  const mode = !modeRaw ? null : /line|grid|bypass/.test(ml) ? "Від мережі" : /battery/.test(ml) ? "Від батареї" : /standby/.test(ml) ? "Очікування" : /fault/.test(ml) ? "Аварія" : modeRaw;
+  return { pv, soc: n("battery capacity", "soc", "state of charge", "battery soc"), load: w("output active power", "ac output active power", "load power"),
+    bv: n("battery voltage"), gridV, grid: gridV == null ? null : gridV > 100, mode };
+}
+
+function renderCard(key) {
+  const c = document.getElementById("c_" + key); if (!c) return;
+  const d = devices.find((x) => x.key === key) || { name: key, kind: "?" };
+  const st = states[key]; const online = st && st.online;
+  const hidden = (dash.hidden || []).includes(key);
+  let html = `<div class="head"><div class="name">${esc(d.name)}</div>`;
+  if (editing) html += `<div class="edit"><button onclick="move('${esc(key)}',-1)">↑</button><button onclick="move('${esc(key)}',1)">↓</button><button onclick="hide('${esc(key)}')">${hidden ? "Показати" : "Сховати"}</button></div>`;
+  let body = "", isOn = false;
+  if (d.kind === "tuya") {
+    const v = tuyaVals(st); isOn = online && v.on;
+    if (!editing) html += toggleBtn(key, v.on);
+    body = `<div class="big">${online ? (v.on ? fmtW(v.power) : "Вимкнено") : "—"}</div><div class="row">
+      <div class="stat"><b>${fmt(v.voltage, "В")}</b><span>напруга</span></div><div class="stat"><b>${fmt(v.current, "А", 2)}</b><span>струм</span></div></div>`;
+  } else if (d.kind === "inv") {
+    const s = invSummary((st && st.points) || []);
+    body = `<div class="row"><div class="stat"><b>${fmt(s.soc, "%", 0)}</b><span>батарея</span></div><div class="stat"><b>${fmtW(s.pv)}</b><span>сонце</span></div>
+      <div class="stat"><b>${fmtW(s.load)}</b><span>навантаження</span></div><div class="stat"><b>${s.grid == null ? "—" : s.grid ? fmt(s.gridV, "В", 0) : "немає"}</b><span>мережа</span></div></div>
+      <div class="status">${esc(s.mode || "")}${s.bv != null ? " · батарея " + fmt(s.bv, "В") : ""}</div>`;
+  } else {
+    const comps = (st && st.state && st.state.comps) || [];
+    for (const cp of comps) {
+      const sw = ["relay", "pwm", "ws2812", "tuya"].includes(cp.t);
+      if (sw && cp.on) isOn = true;
+      let val = "";
+      if (cp.temp != null) val += fmt(cp.temp, "°C") + " ";
+      if (cp.hum != null) val += fmt(cp.hum, "%", 0) + " ";
+      if (cp.pres != null) val += Math.round(cp.pres * 0.750062) + " мм ";
+      if (cp.pct != null) val += cp.pct + " % ";
+      if (cp.t === "input" || cp.t === "button") val += cp.active ? "активний" : "спокій";
+      if (cp.t === "thermo") val += cp.state === "on" ? "· гріє" : cp.state === "schedoff" ? "· за розкладом вимк." : "";
+      body += `<div class="comp"><span class="label">${esc(cp.name)}</span><span>${esc(val)}</span>${sw && !editing ? toggleBtn(key, cp.on, cp.i) : ""}</div>`;
+    }
+    if (!comps.length) body = `<div class="status">${online ? "Без компонентів" : ""}</div>`;
+  }
+  html += `</div>` + body;
+  const ago = st && st.at ? Math.round((Date.now() - st.at) / 60000) : null;
+  html += `<div class="status ${online ? "" : "bad"}">${!st ? "чекаю даних…" : online ? (ago > 5 ? `оновлено ${ago} хв тому` : "") : esc(st.error || "не на зв'язку")}</div>`;
+  c.innerHTML = html;
+  c.classList.toggle("on", !!isOn);
+  c.style.opacity = editing && hidden ? 0.45 : 1;
+}
+
+function renderRules() {
+  const b = $("rulesBox");
+  if (!rules.length) { b.innerHTML = ""; return; }
+  b.innerHTML = `<h2>Правила</h2>` + rules.map((r) => `<div class="rule"><div class="t"><div>${esc(r.name)}</div>
+    <div class="s">${r.needsArm ? (armed.includes(r.id) ? "● активне · " : "○ не активне · ") : ""}${esc(r.enabled === false ? "вимкнено" : (rstatus[r.id] || {}).text || "…")}</div></div>
+    <div class="toggle ${r.enabled !== false ? "on" : ""}" style="flex:none" onclick="event.stopPropagation(); toggleRule('${esc(r.id)}')"></div></div>`).join("");
+}
+function toggleRule(id) {
+  const r = rules.find((x) => x.id === id); if (!r) return;
+  r.enabled = r.enabled === false; send({ t: "rules_set", rules }); renderRules();
+}
+
+setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 25000);
+setInterval(() => devices.forEach((d) => renderCard(d.key)), 60000);
+$("app").style.display = "block";
+connect();
+</script>
+</body>
+</html>

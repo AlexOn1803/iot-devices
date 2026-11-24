@@ -1035,11 +1035,13 @@ void mqttLoop(uint32_t now) {
   mqtt.loop();
   // Трафік безкоштовного брокера обмежений (EMQX: 1 ГБ/міс.), тож:
   // перемикання — одразу; зміни показів датчиків — не частіше ніж раз на 20 с; без змін — раз на 2 хв.
+  // Локальний брокер на Raspberry Pi (порт 1883) трафік не рахує — там зміни датчиків раз на 2 с.
   if (now - mqttLastCheck > 1000) {
     mqttLastCheck = now;
     String sw = switchSignature();
     bool switched = sw != mqttLastSwitch;
-    bool sensorsDue = now - mqttLastFull > 20000 && stateJson(false) != mqttLastState;
+    uint32_t sensorGap = mqttPort == 1883 ? 2000 : 20000;
+    bool sensorsDue = now - mqttLastFull > sensorGap && stateJson(false) != mqttLastState;
     if (switched || sensorsDue || now - mqttLastFull > 120000) {
       mqttLastSwitch = sw;
       mqttLastState = stateJson(false);

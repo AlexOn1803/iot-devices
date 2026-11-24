@@ -56,7 +56,9 @@ fun RulesScreen(nav: Nav) {
         ) {
             Text(
                 "«Якщо дані пристрою такі — зроби це». Наприклад: інвертор перейшов на батарею → вимкнути бойлер. " +
-                    "Правила можна з'єднувати в ланцюжок: одне активує інше. Працюють, поки ввімкнений фоновий моніторинг (Налаштування).",
+                    "Правила можна з'єднувати в ланцюжок: одне активує інше. " +
+                    if (IotApp.instance.controller.hubMode()) "Правила зберігаються й виконуються на Raspberry Pi — цілодобово, навіть коли телефон вимкнений."
+                    else "Працюють, поки ввімкнений фоновий моніторинг (Налаштування).",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             OutlinedButton(onClick = { templates = true }, modifier = Modifier.fillMaxWidth()) { Text("Готові приклади") }

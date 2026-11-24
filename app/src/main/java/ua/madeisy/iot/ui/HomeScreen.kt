@@ -71,6 +71,8 @@ fun HomeScreen(nav: Nav) {
     var groupWidget by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val hubSettings by app.controller.hub.settings.collectAsState()
+    val hubStatus by app.controller.hub.status.collectAsState()
 
     Scaffold(
         topBar = {
@@ -115,6 +117,19 @@ fun HomeScreen(nav: Nav) {
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = pad.calculateBottomPadding() + 88.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                if (hubSettings.configured && !hubStatus.connected) item(key = "pi-off") {
+                    androidx.compose.material3.Card(
+                        colors = androidx.compose.material3.CardDefaults.cardColors(containerColor = androidx.compose.material3.MaterialTheme.colorScheme.errorContainer),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(Modifier.padding(16.dp)) {
+                            Text(if (hubStatus.connecting) "Підключення до Raspberry Pi…" else "Raspberry Pi недоступна",
+                                style = androidx.compose.material3.MaterialTheme.typography.titleSmall)
+                            Text(hubStatus.error ?: "Керування пристроями — лише через Pi. Перевір, чи вона увімкнена й має інтернет.",
+                                style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
                 items(inverters, key = { "inv-" + it.sn }) { d ->
                     InverterCard(d, invStates[d.sn] ?: ua.madeisy.iot.inverter.InverterState()) { nav.push(Screen.Inverter(d.sn)) }
                 }

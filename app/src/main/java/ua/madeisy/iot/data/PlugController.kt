@@ -112,11 +112,21 @@ class PlugController(
         scope.launch { storage.espLinks.collect { syncHub() } }
         scope.launch {
             // хаб з'явився/зник — перезапускаємо цикли: або віддаємо пристрої хабу, або беремо назад
-            hub.status.map { it.connected }.distinctUntilChanged().collect {
+            hub.status.map { it.connected }.distinctUntilChanged().collect { connected ->
                 synchronized(this@PlugController) { watchers.keys.toList() }.forEach { k -> restart(k) }
+                if (!connected && hubMode()) markPiUnavailable()
             }
         }
+        scope.launch { hub.notifications.collect { (t, x) -> ua.madeisy.iot.service.Notifications.alert(ctx, t, x) } }
         hub.start()
+    }
+
+    /** Pi зникла: показати це на всіх пристроях (останні значення лишаються). */
+    private fun markPiUnavailable() {
+        for (d in storage.devices.value) {
+            if (d.isEsp) espUpdate(d.key) { it.copy(online = false, connecting = false, viaHub = true, error = "Raspberry Pi недоступна") }
+            else update(d.key) { it.copy(source = Source.NONE, connecting = false, error = "Raspberry Pi недоступна") }
+        }
     }
 
     /** Надіслати хабу пристрої (з ключами) і акаунт інвертора — лише якщо щось змінилось. */
@@ -126,12 +136,14 @@ class PlugController(
         for (d in storage.devices.value) {
             if (d.isEsp) {
                 if (d.ip.isBlank()) continue
-                devs.put(JSONObject().put("key", d.key).put("kind", "ESP").put("ip", d.ip).put("apiKey", d.apiKey).put("name", d.name))
+                devs.put(JSONObject().put("key", d.key).put("kind", "ESP").put("ip", d.ip).put("apiKey", d.apiKey).put("name", d.name)
+                    .put("deviceId", d.deviceId))
             } else {
                 if (!d.canLocal || d.mode == ConnectionMode.CLOUD) continue
                 devs.put(JSONObject().put("key", d.key).put("kind", "TUYA").put("deviceId", d.deviceId).put("localKey", d.localKey)
                     .put("ip", d.ip).put("version", d.version).put("name", d.name)
-                    .put("measured", JSONArray(d.dps.measured)).put("shared", storage.isSharedWithEsp(d.key)))
+                    .put("measured", JSONArray(d.dps.measured)).put("shared", storage.isSharedWithEsp(d.key))
+                    .put("dps", d.dps.toJson()))
             }
         }
         val msg = JSONObject().put("t", "sync").put("devices", devs)
@@ -169,11 +181,12 @@ class PlugController(
     }
 
     /** Цикл пристрою має поступитися хабу: хаб керує ним (або щойно підключився і ще надсилає стан). */
-    private fun hubOwns(key: String): Boolean {
-        val st = hub.status.value
-        if (!st.connected) return false
-        return key in hub.managed || System.currentTimeMillis() - hub.onlineSince < 4000
-    }
+    /** Режим «тільки Raspberry Pi»: якщо хаб підключено, телефон сам пристроями не керує. */
+    fun hubMode(): Boolean = hub.settings.value.configured
+
+    private fun hubOwns(key: String): Boolean = hubMode()
+
+    private fun piUnavailable() = IOException("Raspberry Pi недоступна")
 
     fun state(key: String): PlugState = _states.value[key] ?: PlugState()
 
@@ -260,6 +273,7 @@ class PlugController(
     private fun espClient(cfg: DeviceConfig) = EspClient(cfg.ip, cfg.apiKey)
 
     private fun ensureMqtt() {
+        if (hubMode()) { mqtt.stop(); return }   // плати тепер говорять з Pi напряму
         val s = storage.mqtt.value
         if (s.configured && storage.devices.value.any { it.isEsp }) mqtt.ensure(s) else if (!s.configured) mqtt.stop()
     }
@@ -386,7 +400,8 @@ class PlugController(
     suspend fun espSet(key: String, vararg commands: JSONObject): Result<Unit> {
         val cfg = storage.device(key) ?: return Result.failure(IOException("Пристрій не знайдено"))
         var err: Exception? = null
-        if (hub.manages(key)) {
+        if (hubMode()) {
+            if (!hub.status.value.connected) return Result.failure(piUnavailable())
             val body: Any = if (commands.size == 1) commands[0] else JSONArray(commands.toList())
             val r = hub.request(JSONObject().put("t", "cmd").put("key", key).put("esp", body))
             if (r.isSuccess) {
@@ -402,7 +417,7 @@ class PlugController(
                 }
                 return Result.success(Unit)
             }
-            err = r.exceptionOrNull() as? Exception
+            return Result.failure(r.exceptionOrNull() ?: piUnavailable())
         }
         if (!espState(key).remote && cfg.ip.isNotBlank()) {
             try {
@@ -685,11 +700,12 @@ class PlugController(
         val strValues = values.mapKeys { it.key.toString() }
         var lastError: Exception? = null
 
-        if (hub.manages(key)) {
+        if (hubMode()) {
+            if (!hub.status.value.connected) return Result.failure(piUnavailable())
             val dps = JSONObject().apply { strValues.forEach { (k, v) -> put(k, v ?: JSONObject.NULL) } }
             val r = hub.request(JSONObject().put("t", "cmd").put("key", key).put("dps", dps))
             if (r.isSuccess) { applyDps(key, cfg, strValues, Source.HUB); return Result.success(Unit) }
-            lastError = r.exceptionOrNull() as? Exception
+            return Result.failure(r.exceptionOrNull() ?: piUnavailable())
         }
 
         clients[key]?.takeIf { it.connected }?.let { c ->
@@ -755,7 +771,11 @@ class PlugController(
     /** Разове оновлення стану без постійного з'єднання (для віджета). */
     suspend fun refreshOnce(key: String): Result<PlugState> {
         val cfg = storage.device(key) ?: return Result.failure(IOException("Пристрій не знайдено"))
-        if (hub.manages(key)) return Result.success(state(key))   // хаб сам надсилає зміни
+        if (hubMode()) {   // хаб сам надсилає зміни; попросимо свіжий знімок
+            if (!hub.status.value.connected) return Result.failure(piUnavailable())
+            hub.send(JSONObject().put("t", "get"))
+            return Result.success(state(key))
+        }
         if (cfg.isEsp) {
             ensureMqtt()
             return try {

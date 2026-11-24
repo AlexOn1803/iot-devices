@@ -86,8 +86,10 @@ jobs:
 
       - name: Hub (Raspberry Pi) on fake devices
         run: |
-          pip install -q aiohttp
+          pip install -q aiohttp paho-mqtt amqtt
           timeout 120 python3 hub/tests/test_hub.py
+          timeout 180 python3 hub/tests/test_server.py
+          bash -n hub/install.sh
 
   firmware:
     runs-on: ubuntu-latest

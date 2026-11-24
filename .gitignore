@@ -9,3 +9,5 @@ captures/
 *.jks
 !app/debug.keystore
 firmware/esp32c3/.pio/
+__pycache__/
+*.pyc

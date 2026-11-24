@@ -27,8 +27,12 @@ import threading
 import time
 import urllib.parse
 
+import sys
+
 import aiohttp
 from aiohttp import web
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 VERSION = "1.0"
 log = logging.getLogger("iothub")
@@ -259,6 +263,41 @@ class EspWorker:
         self.task = asyncio.get_event_loop().create_task(self.run())
         self.last_json = None
         self.kick = asyncio.Event()
+        self.mqtt_at = 0.0          # коли востаннє прийшов стан по MQTT
+        self.provisioned = False
+
+    def on_mqtt_state(self, j: dict):
+        """Плата сама надіслала стан на брокер Pi — миттєво, без опитування."""
+        self.mqtt_at = time.time()
+        txt = json.dumps(j, sort_keys=True)
+        if txt != self.last_json or not self.state["online"]:
+            self.last_json = txt
+            self.state.update(online=True, state=j, error=None, at=now_ms(), via="mqtt")
+            self.hub.emit(self.key, dict(self.state))
+
+    def on_mqtt_offline(self):
+        self.mqtt_at = 0
+        self.kick.set()   # перевірити через HTTP
+
+    async def provision(self, s):
+        """Налаштувати плату на брокер Pi (замість хмарного), якщо ще не налаштована."""
+        mq = self.hub.cfg.data.get("mqtt") or {}
+        ip = lan_ip()
+        if not mq.get("user") or not ip or not self.cfg.get("apiKey"):
+            return
+        try:
+            async with s.get(self.base() + "/api/info", headers=self.headers()) as r:
+                info = await r.json(content_type=None)
+            if info.get("mqttHost") == ip:
+                self.provisioned = True
+                return
+            body = {"host": ip, "port": mq.get("port", 1883), "user": mq["user"], "pass": mq["pass"]}
+            async with s.post(self.base() + "/api/mqtt", headers=self.headers(), json=body) as r:
+                if r.status < 300:
+                    self.provisioned = True
+                    log.info("esp %s now reports to the Pi broker", self.key)
+        except Exception as e:
+            log.info("esp %s provisioning: %s", self.key, e)
 
     def base(self):
         return "http://%s" % self.cfg["ip"]
@@ -270,6 +309,15 @@ class EspWorker:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=4)) as s:
             self.session = s
             while True:
+                # поки плата сама шле стан по MQTT — HTTP лише зрідка, для перевірки
+                if time.time() - self.mqtt_at < 90:
+                    self.kick.clear()
+                    try:
+                        await asyncio.wait_for(self.kick.wait(), 30)
+                    except asyncio.TimeoutError:
+                        pass
+                    if time.time() - self.mqtt_at < 90:
+                        continue
                 try:
                     async with s.get(self.base() + "/api/state", headers=self.headers()) as r:
                         if r.status == 401:
@@ -278,8 +326,10 @@ class EspWorker:
                     txt = json.dumps(j, sort_keys=True)
                     if txt != self.last_json or not self.state["online"]:
                         self.last_json = txt
-                        self.state.update(online=True, state=j, error=None, at=now_ms())
+                        self.state.update(online=True, state=j, error=None, at=now_ms(), via="http")
                         self.hub.emit(self.key, dict(self.state))
+                    if not self.provisioned:
+                        await self.provision(s)
                     delay = 2
                 except asyncio.CancelledError:
                     raise
@@ -294,7 +344,12 @@ class EspWorker:
                 except asyncio.TimeoutError:
                     pass
 
-    async def command(self, body: dict):
+    async def command(self, body):
+        # плата на зв'язку з брокером Pi — команда через MQTT (миттєво), інакше — HTTP
+        if time.time() - self.mqtt_at < 90 and self.cfg.get("deviceId") and self.hub.mqtt and self.hub.mqtt.connected:
+            cmds = body if isinstance(body, list) else [body]
+            self.hub.mqtt.publish("iotdev/%s/set" % self.cfg["deviceId"], {"key": self.cfg.get("apiKey", ""), "cmds": cmds})
+            return
         async with self.session.post(self.base() + "/api/set", headers=self.headers(), json=body) as r:
             txt = await r.text()
             if r.status >= 300:
@@ -388,6 +443,13 @@ class Hub:
         self.esp = {}
         self.inverter = None
         self.pair_until = time.time() + 15 * 60
+        if not self.cfg.data.get("pin"):
+            import random
+            self.cfg.data["pin"] = "%06d" % random.SystemRandom().randint(0, 999999)
+            self.cfg.save()
+        from rules import RuleEngine
+        self.rules = RuleEngine(self)
+        self.mqtt = None
         self.apply_devices()
 
     # ---- пристрої
@@ -418,6 +480,96 @@ class Hub:
             if k not in keep:
                 del self.states[k]
 
+    # ---- дані пристроїв (для правил і панелі)
+    def device(self, key):
+        return next((d for d in self.cfg.data.get("devices", []) if d.get("key") == key), None)
+
+    def name_of(self, key):
+        if key.startswith("inv:"):
+            for d in (self.cfg.data.get("inverter") or {}).get("devices", []):
+                if "inv:" + d["sn"] == key:
+                    return d.get("alias") or "Інвертор"
+        d = self.device(key)
+        return (d or {}).get("name") or key
+
+    def tuya_values(self, key):
+        d, st = self.device(key) or {}, self.states.get(key) or {}
+        dps, m = st.get("dps") or {}, d.get("dps") or {}
+
+        def num(dp, scale):
+            v = dps.get(str(m.get(dp[0], dp[1])))
+            return v / 10 ** m.get(scale[0], scale[1]) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+        on = dps.get(str(m.get("switch", 1)))
+        on = on if isinstance(on, bool) else None
+        power, cur = num(("power", 19), ("powerScale", 1)), num(("current", 18), ("currentScale", 3))
+        return {"online": bool(st.get("online")), "on": on, "power": 0.0 if on is False else power,
+                "current": 0.0 if on is False else cur, "voltage": num(("voltage", 20), ("voltageScale", 1))}
+
+    def value(self, key, metric):
+        st = self.states.get(key)
+        if not st:
+            return None
+        fresh = time.time() * 1000 - st.get("at", 0) < 15 * 60_000
+        if key.startswith("inv:"):
+            if not st.get("online") or not fresh:
+                return None
+            pts = st.get("points") or []
+            if metric.startswith("pt:"):
+                p = next((p for p in pts if p.get("title") == metric[3:]), None)
+                if not p:
+                    return None
+                try:
+                    return float(str(p.get("val")).replace(",", "."))
+                except ValueError:
+                    return p.get("val")
+            from rules import inverter_summary
+            return inverter_summary(pts).get(metric)
+        if metric == "online":
+            return bool(st.get("online"))
+        if not st.get("online"):
+            return None
+        if st.get("kind") == "tuya":
+            return self.tuya_values(key).get(metric)
+        # плата ESP: c<i>:<поле>
+        try:
+            i, field = metric[1:].split(":", 1)
+            i = int(i)
+        except ValueError:
+            return None
+        comp = next((c for c in ((st.get("state") or {}).get("comps") or []) if c.get("i") == i), None)
+        if not comp:
+            return None
+        v = comp.get(field)
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+
+    async def switch(self, key, on, comp=-1):
+        """on=True/False, None — перемкнути. Для плати — компонент comp (-1 — перший вихід)."""
+        if key in self.tuya:
+            d = self.device(key) or {}
+            dp = str((d.get("dps") or {}).get("switch", 1))
+            if on is None:
+                on = not bool(((self.states.get(key) or {}).get("dps") or {}).get(dp))
+            self.tuya[key].command({dp: bool(on)})
+            return
+        if key in self.esp:
+            if comp is None or comp < 0:
+                comps = ((self.states.get(key) or {}).get("state") or {}).get("comps") or []
+                out = next((c for c in comps if c.get("t") in ("relay", "pwm", "ws2812", "tuya")), None)
+                if out is None:
+                    raise IOError("у плати немає виходу")
+                comp = out["i"]
+            cmd = {"i": comp, "toggle": True} if on is None else {"i": comp, "on": bool(on)}
+            await self.esp[key].command(cmd)
+            return
+        raise KeyError("хаб не керує пристроєм " + self.name_of(key))
+
+    def devices_meta(self):
+        out = [{"key": d["key"], "name": d.get("name") or d["key"], "kind": "esp" if d.get("kind") == "ESP" else "tuya"}
+               for d in self.cfg.data.get("devices", [])]
+        for d in (self.cfg.data.get("inverter") or {}).get("devices", []):
+            out.insert(0, {"key": "inv:" + d["sn"], "name": d.get("alias") or "Інвертор", "kind": "inv"})
+        return out
+
     def remember_ip(self, key, ip, version):
         def upd():
             for d in self.cfg.data.get("devices", []):
@@ -434,6 +586,8 @@ class Hub:
 
     def emit(self, key, state):
         self.states[key] = state
+        if state.get("kind") == "tuya":
+            state["vals"] = self.tuya_values(key)
         self.broadcast({"t": "state", "key": key, "state": state})
 
     def broadcast(self, msg):
@@ -451,7 +605,10 @@ class Hub:
 
     def hello(self):
         return {"t": "hello", "name": self.cfg.name, "version": VERSION, "keys": sorted(self.states),
-                "lan": lan_ip(), "port": PORT}
+                "lan": lan_ip(), "port": PORT, "devices": self.devices_meta(), "dash": self.cfg.data.get("dash") or {}}
+
+    def rules_msg(self):
+        return {"t": "rules", "rules": self.rules.rules, "armed": sorted(self.rules.armed), "status": self.rules.status}
 
     def snapshot(self):
         return {"t": "snapshot", "states": self.states}
@@ -462,15 +619,41 @@ class Hub:
         if t == "get":
             await reply(self.hello())
             await reply(self.snapshot())
+            await reply(self.rules_msg())
+        elif t == "rules_get":
+            await reply(self.rules_msg())
+        elif t == "rules_set":
+            if isinstance(msg.get("rules"), list):
+                self.rules.set_rules(msg["rules"])
+            await reply({"t": "ack", "id": msg.get("id"), "ok": True})
+            self.broadcast(self.rules_msg())
+        elif t == "arm":
+            self.rules.set_armed(msg.get("rule", ""), bool(msg.get("on")))
+            self.broadcast(self.rules_msg())
+        elif t == "dash_set":
+            self.cfg.data["dash"] = msg.get("dash") or {}
+            self.cfg.save()
+            await reply({"t": "ack", "id": msg.get("id"), "ok": True})
+            self.broadcast(self.hello())
+        elif t == "switch":
+            try:
+                await self.switch(msg.get("key", ""), msg.get("on"), msg.get("comp", -1))
+                await reply({"t": "ack", "id": msg.get("id"), "ok": True})
+            except Exception as e:
+                await reply({"t": "ack", "id": msg.get("id"), "ok": False, "error": str(e)})
         elif t == "sync":
             if isinstance(msg.get("devices"), list):
                 self.cfg.data["devices"] = msg["devices"]
             if "inverter" in msg:
                 self.cfg.data["inverter"] = msg["inverter"]
+            if isinstance(msg.get("rules"), list):
+                self.rules.set_rules(msg["rules"])
             self.cfg.save()
             self.apply_devices()
             await reply({"t": "ack", "id": msg.get("id"), "ok": True})
+            self.broadcast(self.hello())
             await reply(self.snapshot())
+            self.broadcast(self.rules_msg())
         elif t == "cmd":
             key = msg.get("key", "")
             try:
@@ -485,8 +668,19 @@ class Hub:
                 await reply({"t": "ack", "id": msg.get("id"), "ok": False, "error": str(e)})
 
     # ---- локальний сервер
+    def web_session(self):
+        return hashlib.sha256(("web:" + self.cfg.token).encode()).hexdigest()
+
+    def authorized(self, req):
+        if req.query.get("token") == self.cfg.token or req.headers.get("X-Hub-Token") == self.cfg.token:
+            return True
+        if req.cookies.get("hub") == self.web_session():
+            return True
+        # екран самого Pi (кіоск) — без входу
+        return req.remote in ("127.0.0.1", "::1") and not req.headers.get("CF-Connecting-IP")
+
     async def ws_handler(self, req):
-        if req.query.get("token") != self.cfg.token and req.headers.get("X-Hub-Token") != self.cfg.token:
+        if not self.authorized(req):
             return web.Response(status=401, text="bad token")
         ws = web.WebSocketResponse(heartbeat=20)
         await ws.prepare(req)
@@ -494,6 +688,7 @@ class Hub:
         try:
             await ws.send_str(json.dumps(self.hello(), ensure_ascii=False))
             await ws.send_str(json.dumps(self.snapshot(), ensure_ascii=False))
+            await ws.send_str(json.dumps(self.rules_msg(), ensure_ascii=False))
 
             async def reply(m):
                 await ws.send_str(json.dumps(m, ensure_ascii=False))
@@ -525,6 +720,27 @@ class Hub:
     def open_pairing(self, minutes=15):
         self.pair_until = time.time() + minutes * 60
         log.info("pairing open for %d min", minutes)
+
+    async def login_handler(self, req):
+        """Вхід у веб-панель PIN-кодом (його показує install.sh і `sudo iot-hub-pin`)."""
+        try:
+            pin = str((await req.json()).get("pin", "")).strip()
+        except Exception:
+            pin = ""
+        now = time.time()
+        self._fails = [t for t in getattr(self, "_fails", []) if now - t < 300]
+        if len(self._fails) >= 10:
+            return web.json_response({"error": "Забагато спроб, зачекай 5 хв"}, status=429)
+        if pin != self.cfg.data.get("pin"):
+            self._fails.append(now)
+            return web.json_response({"error": "Невірний PIN"}, status=403)
+        resp = web.json_response({"ok": True})
+        resp.set_cookie("hub", self.web_session(), max_age=365 * 86400, httponly=True, samesite="Strict")
+        return resp
+
+    async def index_handler(self, req):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "index.html")
+        return web.FileResponse(path, headers={"Cache-Control": "no-cache"})
 
     async def info_handler(self, req):
         # без токена — лише щоб додаток знайшов хаб у мережі
@@ -581,12 +797,19 @@ def main():
     app.router.add_get("/ws", hub.ws_handler)
     app.router.add_get("/api/info", hub.info_handler)
     app.router.add_get("/api/pair", hub.pair_handler)
+    app.router.add_post("/api/login", hub.login_handler)
+    app.router.add_get("/", hub.index_handler)
     try:
         import signal
         loop.add_signal_handler(signal.SIGUSR1, hub.open_pairing)
     except (NotImplementedError, AttributeError):
         pass
     loop.create_task(hub.relay_loop())
+    loop.create_task(hub.rules.run())
+    if cfg.data.get("mqtt"):
+        from mqttbridge import MqttBridge
+        hub.mqtt = MqttBridge(hub, cfg.data["mqtt"])
+        hub.mqtt.start()
     log.info("IoT hub %s on :%d, relay %s", VERSION, PORT, cfg.relay or "—")
     web.run_app(app, port=PORT, loop=loop, print=None)
 

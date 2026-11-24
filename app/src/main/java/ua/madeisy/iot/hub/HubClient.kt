@@ -70,6 +70,14 @@ class HubClient(context: Context, private val scope: CoroutineScope) {
     private val _connected = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
     val connectedEvents: SharedFlow<Unit> = _connected
 
+    /** Правила на хабі: останнє повідомлення {"t":"rules"} (правила, активні кроки, статуси). */
+    private val _rules = MutableStateFlow<JSONObject?>(null)
+    val rules: StateFlow<JSONObject?> = _rules
+
+    /** Сповіщення від правил хаба. */
+    private val _notify = MutableSharedFlow<Pair<String, String>>(extraBufferCapacity = 16)
+    val notifications: SharedFlow<Pair<String, String>> = _notify
+
     /** Ключі пристроїв, якими зараз керує хаб. */
     val managed: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
@@ -223,6 +231,15 @@ class HubClient(context: Context, private val scope: CoroutineScope) {
                 _states.tryEmit(k to st)
             }
             "ack" -> pending.remove(j.optInt("id"))?.complete(j)
+            "rules" -> _rules.value = j
+            "rule_status" -> _rules.value?.let { cur ->
+                val n = JSONObject(cur.toString())
+                val st = n.optJSONObject("status") ?: JSONObject().also { n.put("status", it) }
+                st.put(j.optString("id"), j.optJSONObject("status"))
+                j.optJSONArray("armed")?.let { n.put("armed", it) }
+                _rules.value = n
+            }
+            "notify" -> _notify.tryEmit(j.optString("title") to j.optString("text"))
         }
     }
 

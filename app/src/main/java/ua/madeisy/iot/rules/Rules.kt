@@ -279,6 +279,41 @@ class RuleEngine(private val ctx: Context) {
     private val _status = MutableStateFlow<Map<String, RuleStatus>>(emptyMap())
     val status: StateFlow<Map<String, RuleStatus>> = _status
 
+    private fun hubMode() = runCatching { IotApp.instance.controller.hubMode() }.getOrDefault(false)
+    private val hub get() = IotApp.instance.controller.hub
+
+    init {
+        // з Raspberry Pi: правила зберігаються й виконуються на ній, тут — лише перегляд і редагування
+        scope.launch {
+            kotlinx.coroutines.delay(500)
+            hub.rules.collect { j ->
+                if (j == null || !hubMode()) return@collect
+                val list = Rule.listFromJson(j.optJSONArray("rules")?.toString())
+                if (list.isEmpty() && _rules.value.isNotEmpty() && !migrated) {
+                    // перший раз: перенести правила з телефона на Pi
+                    migrated = true
+                    pushToHub(_rules.value)
+                    return@collect
+                }
+                migrated = true
+                _rules.value = list
+                prefs.edit().putString("list", Rule.listToJson(list)).apply()
+                val a = j.optJSONArray("armed")
+                _armed.value = (0 until (a?.length() ?: 0)).map { a!!.getString(it) }.toSet()
+                val st = j.optJSONObject("status")
+                if (st != null) _status.value = st.keys().asSequence().associateWith { k ->
+                    val o = st.getJSONObject(k)
+                    RuleStatus(o.optString("text"), o.optLong("at"), o.optLong("firedAt"))
+                }
+            }
+        }
+    }
+    @Volatile private var migrated = false
+
+    private fun pushToHub(l: List<Rule>) {
+        hub.send(JSONObject().put("t", "rules_set").put("rules", org.json.JSONArray(Rule.listToJson(l))))
+    }
+
     private val trueSince = HashMap<String, Long>()
     private val latched = HashSet<String>()      // уже спрацювало, чекаємо, поки умови стануть хибними
     private val lastFired = HashMap<String, Long>()
@@ -309,9 +344,11 @@ class RuleEngine(private val ctx: Context) {
     private fun store(l: List<Rule>) {
         prefs.edit().putString("list", Rule.listToJson(l)).apply()
         _rules.value = l
+        if (hubMode()) pushToHub(l)
     }
 
     fun setArmed(id: String, on: Boolean) {
+        if (hubMode()) { hub.send(JSONObject().put("t", "arm").put("rule", id).put("on", on)); return }
         val s = if (on) _armed.value + id else _armed.value - id
         prefs.edit().putStringSet("armed", s).apply()
         _armed.value = s
@@ -340,7 +377,8 @@ class RuleEngine(private val ctx: Context) {
     }
 
     private suspend fun tick() {
-        val list = _rules.value.filter { it.enabled }
+        // з Raspberry Pi правила виконує вона — цілодобово, без телефона
+        val list = if (hubMode()) emptyList() else _rules.value.filter { it.enabled }
         val app = IotApp.instance
         // тримаємо з'єднання з пристроями правил
         val need = list.flatMap { it.devices }.filterNot { it.startsWith("inv:") }.toSet()
