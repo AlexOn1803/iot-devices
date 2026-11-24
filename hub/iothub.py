@@ -30,6 +30,7 @@ import urllib.parse
 import sys
 
 import aiohttp
+import yarl
 from aiohttp import web
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -428,7 +429,8 @@ class InverterWorker:
         else:
             sign = sha1(salt + self.token[1] + self.token[0] + act)
             url = "%s?sign=%s&salt=%s&token=%s%s" % (base, sign, salt, self.token[0], act)
-        async with s.get(url) as r:
+        # encoded=True: не розкодовувати %40 тощо — сервер перевіряє підпис саме по цих байтах
+        async with s.get(yarl.URL(url, encoded=True)) as r:
             j = await r.json(content_type=None)
         if j.get("err", 0) != 0:
             raise IOError("SmartESS: %s" % (j.get("desc") or j.get("err")))
