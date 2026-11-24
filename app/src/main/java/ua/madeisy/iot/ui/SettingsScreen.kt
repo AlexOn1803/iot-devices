@@ -173,9 +173,8 @@ fun SettingsScreen(nav: Nav) {
 
             HubCard(snackbar)
 
-            // з Raspberry Pi плати під'єднані до її брокера — хмарний MQTT не потрібен
-            val hubCfg by app.controller.hub.settings.collectAsState()
-            if (!hubCfg.configured) MqttCard(snackbar, nav)
+            // з Raspberry Pi хмарний MQTT — резерв, коли Pi недоступна
+            MqttCard(snackbar, nav)
 
             SmartEssCard(snackbar)
 

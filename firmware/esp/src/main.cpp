@@ -78,6 +78,10 @@ void ledLoad();
 void ledWrite(bool on);
 bool pinUsed(int p);
 String mqttHost;
+// Два брокери: локальний на Raspberry Pi (основний) і хмарний (резерв)
+String mqCloudHost, mqCloudUser, mqCloudPass, mqLocHost, mqLocUser, mqLocPass;
+int mqCloudPort = 8883, mqLocPort = 1883;
+bool mqttOnLocal = false;
 
 // ---------------- компоненти ----------------
 
@@ -742,6 +746,8 @@ String infoJson() {
   doc["board"] = FW_BOARD;
   doc["mqtt"] = mqttStatus;
   doc["mqttHost"] = mqttHost;
+  doc["mqttLocal"] = mqLocHost;       // є поле — прошивка вміє два брокери
+  doc["mqttVia"] = mqttOnLocal ? "local" : "cloud";
   String s;
   serializeJson(doc, s);
   return s;
@@ -978,12 +984,18 @@ void mqttCallback(char* topic, byte* payload, unsigned int len) {
   mqttLastState = ""; mqttLastSwitch = "";  // одразу опублікувати новий стан
 }
 
-void mqttApplySettings() {
+// Два брокери: локальний на Raspberry Pi (основний) і хмарний (резерв, коли Pi недоступна).
+uint8_t mqttFails = 0;
+uint32_t mqttProbeAt = 0;
+
+void mqttUse(bool local) {
   if (mqtt.connected()) mqtt.disconnect();   // без клієнта disconnect() звертається до NULL
-  mqttHost = prefs.getString("mq_host", "");
-  mqttPort = prefs.getUInt("mq_port", 8883);
-  mqttUser = prefs.getString("mq_user", "");
-  mqttPass = prefs.getString("mq_pass", "");
+  mqttOnLocal = local;
+  mqttHost = local ? mqLocHost : mqCloudHost;
+  mqttPort = local ? mqLocPort : mqCloudPort;
+  mqttUser = local ? mqLocUser : mqCloudUser;
+  mqttPass = local ? mqLocPass : mqCloudPass;
+  mqttFails = 0;
   mqttEnabled = !mqttHost.isEmpty();
   mqttStatus = mqttEnabled ? "connecting" : "off";
   if (!mqttEnabled) return;
@@ -1009,6 +1021,31 @@ void mqttApplySettings() {
   mqttRetryMs = 5000;
 }
 
+void mqttApplySettings() {
+  mqCloudHost = prefs.getString("mq_host", "");
+  mqCloudPort = prefs.getUInt("mq_port", 8883);
+  mqCloudUser = prefs.getString("mq_user", "");
+  mqCloudPass = prefs.getString("mq_pass", "");
+  mqLocHost = prefs.getString("ml_host", "");
+  mqLocPort = prefs.getUInt("ml_port", 1883);
+  mqLocUser = prefs.getString("ml_user", "");
+  mqLocPass = prefs.getString("ml_pass", "");
+  mqttUse(!mqLocHost.isEmpty());
+}
+
+/** Чи відповідає брокер Pi (швидка перевірка TCP, поки працюємо через хмару). */
+bool mqttLocalReachable() {
+  WiFiClient probe;
+#if defined(ESP8266)
+  probe.setTimeout(1500);
+  bool ok = probe.connect(mqLocHost.c_str(), mqLocPort);
+#else
+  bool ok = probe.connect(mqLocHost.c_str(), mqLocPort, 1500);
+#endif
+  probe.stop();
+  return ok;
+}
+
 void mqttLoop(uint32_t now) {
   if (!mqttEnabled) return;
   if (WiFi.status() != WL_CONNECTED) { mqttStatus = "no wifi"; return; }
@@ -1022,6 +1059,12 @@ void mqttLoop(uint32_t now) {
     String st = mqttTopic("status");
     if (!mqtt.connect(cid.c_str(), mqttUser.c_str(), mqttPass.c_str(), st.c_str(), 1, true, "offline")) {
       mqttStatus = "error " + String(mqtt.state());
+      if (mqttOnLocal) {
+        // Pi не відповідає тричі поспіль — переходимо на хмарний брокер
+        if (++mqttFails >= 3 && !mqCloudHost.isEmpty()) { mqttUse(false); mqttProbeAt = now; }
+        else mqttRetryMs = 5000;
+        return;
+      }
       mqttRetryMs = mqttRetryMs * 2 > 120000 ? 120000 : mqttRetryMs * 2;
       return;
     }
@@ -1033,6 +1076,11 @@ void mqttLoop(uint32_t now) {
     mqttLastState = ""; mqttLastSwitch = "";
   }
   mqtt.loop();
+  // на хмарі, а Pi знову на зв'язку — повертаємось до неї (перевірка раз на 2 хв)
+  if (!mqttOnLocal && !mqLocHost.isEmpty() && now - mqttProbeAt > 120000) {
+    mqttProbeAt = now;
+    if (mqttLocalReachable()) { mqttUse(true); return; }
+  }
   // Трафік безкоштовного брокера обмежений (EMQX: 1 ГБ/міс.), тож:
   // перемикання — одразу; зміни показів датчиків — не частіше ніж раз на 20 с; без змін — раз на 2 хв.
   // Локальний брокер на Raspberry Pi (порт 1883) трафік не рахує — там зміни датчиків раз на 2 с.
@@ -1055,10 +1103,18 @@ void handleMqttPost() {
   if (!requireAuth()) return;
   JsonDocument doc;
   if (!parseBody(doc)) return;
-  prefs.putString("mq_host", (const char*)(doc["host"] | ""));
-  prefs.putUInt("mq_port", doc["port"] | 8883);
-  prefs.putString("mq_user", (const char*)(doc["user"] | ""));
-  prefs.putString("mq_pass", (const char*)(doc["pass"] | ""));
+  if (String((const char*)(doc["slot"] | "")) == "local") {
+    // брокер Raspberry Pi; хмарний лишається резервом
+    prefs.putString("ml_host", (const char*)(doc["host"] | ""));
+    prefs.putUInt("ml_port", doc["port"] | 1883);
+    prefs.putString("ml_user", (const char*)(doc["user"] | ""));
+    prefs.putString("ml_pass", (const char*)(doc["pass"] | ""));
+  } else {
+    prefs.putString("mq_host", (const char*)(doc["host"] | ""));
+    prefs.putUInt("mq_port", doc["port"] | 8883);
+    prefs.putString("mq_user", (const char*)(doc["user"] | ""));
+    prefs.putString("mq_pass", (const char*)(doc["pass"] | ""));
+  }
   mqttApplySettings();
   sendJson(200, infoJson());
 }

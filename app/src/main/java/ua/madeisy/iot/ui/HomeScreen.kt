@@ -125,7 +125,7 @@ fun HomeScreen(nav: Nav) {
                         Column(Modifier.padding(16.dp)) {
                             Text(if (hubStatus.connecting) "Підключення до Raspberry Pi…" else "Raspberry Pi недоступна",
                                 style = androidx.compose.material3.MaterialTheme.typography.titleSmall)
-                            Text("Розетки й інвертор — у резерві з телефона (напряму або через хмару). Плати ESP і правила працюють лише з Pi.",
+                            Text("Резерв: керую напряму та через хмару з телефона. Правила виконує лише сама Pi.",
                                 style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
                         }
                     }

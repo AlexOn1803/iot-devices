@@ -114,7 +114,7 @@ class PlugController(
             // хаб з'явився/зник — перезапускаємо цикли: або віддаємо пристрої хабу, або беремо назад
             hub.status.map { it.connected }.distinctUntilChanged().collect { connected ->
                 synchronized(this@PlugController) { watchers.keys.toList() }.forEach { k -> restart(k) }
-                if (!connected && hubMode()) markEspPiUnavailable()
+                ensureMqtt()   // Pi зникла — резерв через хмарний MQTT; з'явилась — він не потрібен
             }
         }
         scope.launch { hub.notifications.collect { (t, x) -> ua.madeisy.iot.service.Notifications.alert(ctx, t, x) } }
@@ -179,18 +179,7 @@ class PlugController(
     /** Pi на зв'язку — усе йде через неї; інакше резерв: напряму або через хмару з телефона. */
     fun hubLive(): Boolean = hub.status.value.connected
 
-    /** Плати ESP з Pi працюють лише через неї (вони під'єднані до її брокера); розетки й інвертор мають резерв. */
-    private fun espViaPiOnly(key: String) = hubMode() && storage.device(key)?.isEsp == true
-
-    private fun hubOwns(key: String): Boolean = hubLive() || espViaPiOnly(key)
-
-    private fun piUnavailable() = IOException("Raspberry Pi недоступна")
-
-    /** Pi зникла: плати ESP показуємо недоступними (останні значення лишаються). */
-    private fun markEspPiUnavailable() {
-        for (d in storage.devices.value) if (d.isEsp)
-            espUpdate(d.key) { it.copy(online = false, connecting = false, viaHub = true, error = "Raspberry Pi недоступна") }
-    }
+    private fun hubOwns(key: String): Boolean = hubLive()
 
     fun state(key: String): PlugState = _states.value[key] ?: PlugState()
 
@@ -277,7 +266,7 @@ class PlugController(
     private fun espClient(cfg: DeviceConfig) = EspClient(cfg.ip, cfg.apiKey)
 
     private fun ensureMqtt() {
-        if (hubMode()) { mqtt.stop(); return }   // плати говорять лише з Pi
+        if (hubLive()) { mqtt.stop(); return }   // плати говорять з Pi; хмара — лише резерв
         val s = storage.mqtt.value
         if (s.configured && storage.devices.value.any { it.isEsp }) mqtt.ensure(s) else if (!s.configured) mqtt.stop()
     }
@@ -404,7 +393,6 @@ class PlugController(
     suspend fun espSet(key: String, vararg commands: JSONObject): Result<Unit> {
         val cfg = storage.device(key) ?: return Result.failure(IOException("Пристрій не знайдено"))
         var err: Exception? = null
-        if (hubMode() && !hubLive()) return Result.failure(piUnavailable())
         if (hubLive()) {
             val body: Any = if (commands.size == 1) commands[0] else JSONArray(commands.toList())
             val r = hub.request(JSONObject().put("t", "cmd").put("key", key).put("esp", body))
@@ -421,7 +409,7 @@ class PlugController(
                 }
                 return Result.success(Unit)
             }
-            return Result.failure(r.exceptionOrNull() ?: piUnavailable())
+            err = r.exceptionOrNull() as? Exception   // Pi не відповіла — пробуємо резерв
         }
         if (!espState(key).remote && cfg.ip.isNotBlank()) {
             try {
@@ -778,7 +766,6 @@ class PlugController(
             hub.send(JSONObject().put("t", "get"))
             return Result.success(state(key))
         }
-        if (cfg.isEsp && hubMode()) return Result.failure(piUnavailable())
         if (cfg.isEsp) {
             ensureMqtt()
             return try {
