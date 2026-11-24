@@ -296,6 +296,11 @@ class RuleEngine(private val ctx: Context) {
                     return@collect
                 }
                 migrated = true
+                if (prefs.getBoolean("dirty", false)) {
+                    // правила змінили, поки Pi була недоступна — надсилаємо їй версію з телефона
+                    if (pushToHub(_rules.value)) prefs.edit().putBoolean("dirty", false).apply()
+                    return@collect
+                }
                 _rules.value = list
                 prefs.edit().putString("list", Rule.listToJson(list)).apply()
                 val a = j.optJSONArray("armed")
@@ -310,9 +315,8 @@ class RuleEngine(private val ctx: Context) {
     }
     @Volatile private var migrated = false
 
-    private fun pushToHub(l: List<Rule>) {
+    private fun pushToHub(l: List<Rule>): Boolean = hub.status.value.connected &&
         hub.send(JSONObject().put("t", "rules_set").put("rules", org.json.JSONArray(Rule.listToJson(l))))
-    }
 
     private val trueSince = HashMap<String, Long>()
     private val latched = HashSet<String>()      // уже спрацювало, чекаємо, поки умови стануть хибними
@@ -344,7 +348,7 @@ class RuleEngine(private val ctx: Context) {
     private fun store(l: List<Rule>) {
         prefs.edit().putString("list", Rule.listToJson(l)).apply()
         _rules.value = l
-        if (hubMode()) pushToHub(l)
+        if (hubMode() && !pushToHub(l)) prefs.edit().putBoolean("dirty", true).apply()
     }
 
     fun setArmed(id: String, on: Boolean) {
