@@ -279,6 +279,8 @@ data class EspState(
     val remote: Boolean = false,
     /** true — дані йдуть через хаб Raspberry Pi. */
     val viaHub: Boolean = false,
+    /** Як хаб отримує дані плати: "mqtt" (брокер на Pi) або "http" (опитування по Wi-Fi). */
+    val hubVia: String? = null,
 ) {
     /** Перший компонент, яким можна керувати однією кнопкою (для віджета й розкладу). */
     val primary: EspComp? get() = comps.firstOrNull { it.type == EspType.RELAY } ?: comps.firstOrNull { it.isSwitchable }

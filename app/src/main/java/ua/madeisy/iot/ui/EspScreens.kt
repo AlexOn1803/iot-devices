@@ -178,9 +178,9 @@ private fun EspStatusLine(cfg: DeviceConfig, s: EspState) {
         Spacer(Modifier.width(6.dp))
         Text(
             when {
-                s.online && s.viaHub -> "Через хаб Raspberry Pi"
-                s.online && s.remote -> "Через інтернет (MQTT)" + (s.rssi?.let { " · $it dBm" } ?: "")
-                s.online -> "Напряму · ${cfg.ip}" + (s.rssi?.let { " · $it dBm" } ?: "")
+                s.online && s.viaHub -> espHubText(s) + (s.rssi?.let { " · $it dBm" } ?: "")
+                s.online && s.remote -> "Через хмарний MQTT" + espBackup() + (s.rssi?.let { " · $it dBm" } ?: "")
+                s.online -> "Напряму з телефона · ${cfg.ip}" + espBackup() + (s.rssi?.let { " · $it dBm" } ?: "")
                 s.connecting -> "Підключення…"
                 else -> s.error ?: "Офлайн"
             },
@@ -1151,3 +1151,13 @@ private fun ScheduleEditor(list: List<ua.madeisy.iot.esp.SchedPeriod>, heat: Boo
         style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
+
+/** Шлях даних плати через Pi: плата → Pi (MQTT або Wi-Fi) → телефон (вдома або через ретранслятор). */
+fun espHubText(s: ua.madeisy.iot.esp.EspState): String {
+    val board = when (s.hubVia) { "mqtt" -> "MQTT на Pi"; "http" -> "Wi-Fi → Pi"; else -> "Pi" }
+    val route = hubRoute()
+    return "Через Pi · $board" + if (route.isNotBlank()) " · $route" else ""
+}
+
+private fun espBackup(): String =
+    if (runCatching { ua.madeisy.iot.IotApp.instance.controller.hubMode() }.getOrDefault(false)) " (резерв: Pi недоступна)" else ""

@@ -160,7 +160,7 @@ class PlugController(
             val j = st.optJSONObject("state")
             if (online && j != null) {
                 applyEspState(key, j, at = st.optLong("at", System.currentTimeMillis()))
-                espUpdate(key) { it.copy(viaHub = true) }
+                espUpdate(key) { it.copy(viaHub = true, hubVia = st.optString("via").ifBlank { null }) }
             } else espUpdate(key) { it.copy(online = false, connecting = false, viaHub = true, error = err ?: "Плата не відповідає хабу") }
         } else {
             val dps = st.optJSONObject("dps")

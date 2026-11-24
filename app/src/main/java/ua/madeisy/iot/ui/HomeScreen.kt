@@ -214,7 +214,7 @@ private fun EspCard(cfg: DeviceConfig, s: EspState, onClick: () -> Unit, onToggl
                 Text(cfg.name, style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    when { s.online && s.viaHub -> "ESP · через хаб Pi"; s.online && s.remote -> "ESP · через інтернет"; s.online -> "ESP · напряму"; s.connecting -> "Підключення…"; else -> s.error ?: "Офлайн" },
+                    when { s.online && s.viaHub -> "ESP · " + espHubText(s); s.online && s.remote -> "ESP · хмарний MQTT"; s.online -> "ESP · напряму з телефона"; s.connecting -> "Підключення…"; else -> s.error ?: "Офлайн" },
                     style = MaterialTheme.typography.bodySmall,
                     color = if (s.online || s.connecting) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
                     maxLines = 2,

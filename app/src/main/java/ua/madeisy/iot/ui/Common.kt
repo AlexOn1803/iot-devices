@@ -57,10 +57,19 @@ fun SectionCard(title: String? = null, modifier: Modifier = Modifier, content: @
     }
 }
 
+/** Як телефон зараз дістається до Pi: "вдома" / "через ретранслятор". */
+fun hubRoute(): String = when (runCatching { ua.madeisy.iot.IotApp.instance.controller.hub.status.value.via }.getOrNull()) {
+    ua.madeisy.iot.hub.HubVia.LAN -> "вдома"
+    ua.madeisy.iot.hub.HubVia.RELAY -> "через ретранслятор"
+    else -> ""
+}
+
+private fun piConfigured() = runCatching { ua.madeisy.iot.IotApp.instance.controller.hubMode() }.getOrDefault(false)
+
 fun statusText(cfg: DeviceConfig, s: PlugState): String = when {
-    s.source == Source.LOCAL -> "Локально · ${cfg.version}"
-    s.source == Source.CLOUD -> "Через хмару"
-    s.source == Source.HUB -> "Через хаб Pi"
+    s.source == Source.LOCAL -> "Напряму з телефона · ${cfg.version}" + if (piConfigured()) " (резерв: Pi недоступна)" else ""
+    s.source == Source.CLOUD -> "Через хмару Tuya" + if (piConfigured()) " (резерв: Pi недоступна)" else ""
+    s.source == Source.HUB -> "Через Pi · " + hubRoute()
     s.connecting -> "Підключення…"
     s.error != null -> s.error
     else -> "Офлайн"
