@@ -801,6 +801,15 @@ class Hub:
                         log.info("relay connected")
                         self.relay_ws = ws
                         delay = 2
+                        # для веб-панелі поза домом: ретранслятор перевіряє PIN за хешем
+                        await ws.send_str(json.dumps({"t": "panel_auth",
+                                                      "pin": hashlib.sha256(("pin:" + str(self.cfg.data.get("pin", ""))).encode()).hexdigest(),
+                                                      "session": self.web_session()}))
+                        try:
+                            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "index.html"), encoding="utf-8") as f:
+                                await ws.send_str(json.dumps({"t": "panel_html", "html": f.read()}))
+                        except OSError:
+                            pass
 
                         async def reply(m):
                             await ws.send_str(json.dumps(m, ensure_ascii=False))

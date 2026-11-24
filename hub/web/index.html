@@ -104,8 +104,15 @@ function connect() {
     else if (m.t === "rule_status") { rstatus[m.id] = m.status; armed = m.armed || armed; renderRules(); }
     else if (m.t === "ack" && !m.ok) toast(m.error || "Помилка");
     else if (m.t === "notify") toast(`${m.title}: ${m.text}`);
+    else if (m.t === "hub") {   // поза домом, через ретранслятор: чи на зв'язку сама Pi
+      $("conn").className = m.online ? "dot ok" : "dot";
+      $("connText").textContent = m.online ? "хаб на зв'язку" : "Raspberry Pi не на зв'язку";
+      if (m.online) ws.send(JSON.stringify({ t: "get" }));
+    }
   };
 }
+// тримаємо з'єднання живим (ретранслятор Cloudflare закриває мовчазні з'єднання)
+setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 30000);
 function send(m) { if (ws && ws.readyState === 1) { m.id = reqId++; ws.send(JSON.stringify(m)); } else toast("Немає зв'язку з хабом"); }
 
 function showLogin() { $("app").style.display = "none"; $("login").style.display = "block"; $("pin").focus(); }

@@ -176,8 +176,11 @@ fi
 
 # ---- доступ поза домом ----
 RELAY=$(jq -r '.relay // ""' "$CONF" 2>/dev/null || echo "")
-if [ -z "$RELAY" ] || [ "${IOTHUB_REDEPLOY:-}" = 1 ]; then
+REV=$(sha256sum "$DIR/relay/index.js" | cut -c1-12)
+OLD_REV=$(jq -r '.relayRev // ""' "$CONF" 2>/dev/null || echo "")
+if [ -z "$RELAY" ] || [ "${IOTHUB_REDEPLOY:-}" = 1 ] || [ "$REV" != "$OLD_REV" ]; then
   say "Доступ поза домом (Cloudflare Worker, безкоштовно)"
+  [ -n "$RELAY" ] && echo "Ретранслятор оновився (нове: веб-панель поза домом) — потрібен токен ще раз."
   echo "Потрібен API-токен Cloudflare з правом «Edit Cloudflare Workers»:"
   echo "  dash.cloudflare.com → My Profile → API Tokens → Create Token → шаблон «Edit Cloudflare Workers»"
   echo "Токен використовується лише зараз і ніде не зберігається. Enter — пропустити (лише вдома)."
@@ -216,7 +219,7 @@ if [ -z "$RELAY" ] || [ "${IOTHUB_REDEPLOY:-}" = 1 ]; then
     SUB=$(curl -fsS "${H[@]}" "$CF_API/accounts/$ACC/workers/subdomain" | jq -r '.result.subdomain')
     RELAY="https://iot-hub.$SUB.workers.dev"
     systemctl stop iot-hub
-    set_conf '.relay = $r' --arg r "$RELAY"
+    set_conf '.relay = $r | .relayRev = $v' --arg r "$RELAY" --arg v "$REV"
     systemctl start iot-hub
     echo "Ретранслятор: $RELAY"
   fi
@@ -226,7 +229,7 @@ IP=$(hostname -I | awk '{print $1}')
 say "Готово"
 echo "Веб-панель:  http://$IP:8380   (з будь-якого пристрою вдома)"
 jq -r '"PIN панелі:  " + .pin' "$CONF"
-echo "Поза домом:  ${RELAY:-не налаштовано}"
+echo "Поза домом:  ${RELAY:-не налаштовано}   (веб-панель з тим самим PIN; додаток — сам)"
 echo
 echo "Підключи додаток протягом 15 хвилин (телефон — у домашньому Wi-Fi):"
 echo "  IoT Devices → Налаштування → Хаб Raspberry Pi → Знайти хаб"

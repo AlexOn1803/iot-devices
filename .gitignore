@@ -11,3 +11,5 @@ captures/
 firmware/esp32c3/.pio/
 __pycache__/
 *.pyc
+.wrangler/
+node_modules/
