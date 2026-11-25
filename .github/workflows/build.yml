@@ -198,13 +198,14 @@ jobs:
   beta:
     # гілка dev — бета-канал: окремий реліз «beta», стабільний «latest» не чіпаємо
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/dev'
-    needs: [app, tuya-protocol]
+    needs: [app, firmware, tuya-protocol]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: out
-          name: apk
+          pattern: "{apk,fw-*}"
+          merge-multiple: true
 
       - name: Publish "beta" pre-release
         env:
@@ -212,8 +213,10 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           mv out/iot-devices.apk out/iot-devices-beta.apk
+          # прошивки плат теж у беті — бета-додаток оновлює плати саме звідси
+          echo '{"fw":"1.0.${{ github.run_number }}","app":"1.0.${{ github.run_number }}","boards":["esp32c3","esp32","esp32s3","esp32s2","esp8266","esp01"]}' > out/version.json
           gh release delete beta --yes --cleanup-tag || true
-          gh release create beta out/iot-devices-beta.apk \
+          gh release create beta out/iot-devices-beta.apk out/*.bin out/version.json \
             --target ${{ github.sha }} --prerelease --latest=false \
             --title "IoT Devices BETA (збірка ${{ github.run_number }})" \
             --notes "Бета-версія з гілки dev (коміт ${{ github.sha }}). Встановлюється поверх стабільної, дані зберігаються.

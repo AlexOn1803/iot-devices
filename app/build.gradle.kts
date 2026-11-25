@@ -20,6 +20,9 @@ android {
         versionCode = (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1)
         versionName = "1.0." + (System.getenv("GITHUB_RUN_NUMBER") ?: "dev") +
             (if (System.getenv("GITHUB_REF_NAME") == "dev") " BETA" else "")
+        // звідки брати прошивки плат: бета — з релізу beta, стабільна — з latest
+        buildConfigField("String", "RELEASE_TAG",
+            "\"" + (if (System.getenv("GITHUB_REF_NAME") == "dev") "beta" else "latest") + "\"")
     }
 
     signingConfigs {

@@ -98,7 +98,7 @@ import ua.madeisy.iot.esp.EspState
 import ua.madeisy.iot.esp.EspType
 import java.util.Locale
 
-private const val FIRMWARE_URL = "https://github.com/AlexOn1803/iot-devices/releases/tag/latest"
+private val FIRMWARE_URL = "https://github.com/AlexOn1803/iot-devices/releases/tag/" + ua.madeisy.iot.BuildConfig.RELEASE_TAG
 private const val FLASHER_URL = "https://espressif.github.io/esptool-js/"
 
 // ======================= керування =======================

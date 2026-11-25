@@ -141,7 +141,7 @@ object EspDiscovery {
 
 /** Оновлення прошивки плат по Wi-Fi з останнього релізу на GitHub. */
 object EspUpdater {
-    private const val BASE = "https://github.com/AlexOn1803/iot-devices/releases/download/latest"
+    private val BASE = "https://github.com/AlexOn1803/iot-devices/releases/download/" + ua.madeisy.iot.BuildConfig.RELEASE_TAG
 
     @Volatile
     private var cachedLatest: Pair<String, Long>? = null
