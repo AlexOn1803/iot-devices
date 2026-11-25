@@ -6,52 +6,79 @@
 <title>IoT Хаб</title>
 <style>
   :root {
-    --bg: #0f1115; --card: #1a1d24; --card2: #222632; --text: #eef0f4; --sub: #9aa1ad;
-    --accent: #7aa2ff; --on: #2fbf71; --off: #3a3f4b; --warn: #ff6b6b; --radius: 18px;
+    --bg: #0f1115; --card: #1a1d24; --card2: #222632; --line: #2b303c; --text: #eef0f4; --sub: #9aa1ad;
+    --accent: #7aa2ff; --on: #2fbf71; --off: #3a3f4b; --warn: #ff6b6b; --amber: #f2b84b; --radius: 18px;
   }
   @media (prefers-color-scheme: light) {
-    :root:not(.kiosk) { --bg: #f3f4f7; --card: #fff; --card2: #eef0f5; --text: #15171c; --sub: #5d6470; --off: #cfd3dc; }
+    :root:not(.kiosk) { --bg: #f3f4f7; --card: #fff; --card2: #eef0f5; --line: #e2e5ec; --text: #15171c; --sub: #5d6470; --off: #cfd3dc; }
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  header { display: flex; align-items: center; gap: 12px; padding: 16px 20px 8px; }
-  header h1 { font-size: 22px; margin: 0; flex: 1; font-weight: 600; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 18px 6px; flex-wrap: wrap; }
+  header h1 { font-size: 22px; margin: 0; flex: 1; font-weight: 600; min-width: 140px; }
+  nav.tabs { display: flex; gap: 6px; padding: 4px 16px 10px; overflow-x: auto; }
+  nav.tabs button { white-space: nowrap; }
+  nav.tabs button.sel { background: var(--accent); color: #0b1020; }
   .pill { font-size: 13px; color: var(--sub); }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); margin-right: 6px; }
   .dot.ok { background: var(--on); }
-  button { font: inherit; color: inherit; background: var(--card2); border: 0; border-radius: 12px; padding: 8px 14px; cursor: pointer; }
+  button { font: inherit; color: inherit; background: var(--card2); border: 0; border-radius: 12px; padding: 9px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); color: #0b1020; font-weight: 600; }
+  button.danger { color: var(--warn); }
   button.ghost { background: transparent; color: var(--sub); }
-  main { padding: 8px 16px 32px; display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
-  .kiosk main { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; }
-  .card { background: var(--card); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-height: 120px; }
+  button.small { padding: 5px 10px; font-size: 14px; }
+  button:disabled { opacity: .5; cursor: default; }
+  input, select, textarea { font: inherit; color: var(--text); background: var(--card2); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; min-width: 0; }
+  input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
+  input[type=range] { accent-color: var(--accent); padding: 0; border: 0; background: transparent; }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--sub); flex: 1; min-width: 120px; }
+  label.f > input, label.f > select { font-size: 16px; color: var(--text); }
+  label.c { display: flex; gap: 8px; align-items: center; }
+  .grid { padding: 4px 16px 32px; display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+  .kiosk .grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 18px; }
+  .page { padding: 4px 16px 40px; max-width: 900px; }
+  .card { background: var(--card); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .grid .card { min-height: 120px; }
   .card.on { outline: 2px solid color-mix(in srgb, var(--on) 55%, transparent); }
+  .card h3 { margin: 0; font-size: 17px; font-weight: 600; }
+  .stack { display: flex; flex-direction: column; gap: 14px; }
   .head { display: flex; align-items: center; gap: 10px; }
-  .name { font-weight: 600; font-size: 17px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .name { font-weight: 600; font-size: 17px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
   .status { font-size: 13px; color: var(--sub); }
   .status.bad { color: var(--warn); }
+  .status.acc { color: var(--accent); }
   .big { font-size: 34px; font-weight: 600; letter-spacing: -0.5px; }
-  .row { display: flex; gap: 18px; flex-wrap: wrap; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
   .stat { display: flex; flex-direction: column; min-width: 70px; }
   .stat b { font-size: 20px; font-weight: 600; }
   .stat span { font-size: 12px; color: var(--sub); }
-  .toggle { width: 64px; height: 38px; border-radius: 19px; background: var(--off); position: relative; flex: none; transition: background .15s; }
-  .toggle::after { content: ""; position: absolute; top: 4px; left: 4px; width: 30px; height: 30px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .toggle { width: 60px; height: 36px; border-radius: 18px; background: var(--off); position: relative; flex: none; transition: background .15s; cursor: pointer; }
+  .toggle::after { content: ""; position: absolute; top: 4px; left: 4px; width: 28px; height: 28px; border-radius: 50%; background: #fff; transition: left .15s; }
   .toggle.on { background: var(--on); }
-  .toggle.on::after { left: 30px; }
+  .toggle.on::after { left: 28px; }
   .toggle.busy { opacity: .5; }
-  .comp { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--card2); }
+  .comp { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
   .comp:first-of-type { border-top: 0; }
-  .comp .label { flex: 1; }
-  .edit { display: flex; gap: 6px; }
-  section.rules { padding: 0 20px 32px; }
-  section.rules h2 { font-size: 18px; font-weight: 600; margin: 8px 0; }
-  .rule { background: var(--card); border-radius: 14px; padding: 12px 14px; margin-bottom: 8px; display: flex; gap: 12px; align-items: center; }
-  .rule .t { flex: 1; }
-  .rule .s { font-size: 12px; color: var(--accent); }
-  #login { max-width: 320px; margin: 18vh auto; text-align: center; display: none; }
-  #login input { font: 28px/1 monospace; letter-spacing: 8px; text-align: center; width: 100%; padding: 12px; border-radius: 12px; border: 0; background: var(--card); color: var(--text); margin: 16px 0; }
-  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--card2); padding: 10px 16px; border-radius: 12px; display: none; max-width: 90vw; }
-  .empty { color: var(--sub); padding: 24px; }
+  .comp .label { flex: 1; min-width: 120px; }
+  .list .item { display: flex; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+  .list .item:first-child { border-top: 0; }
+  .item .t { flex: 1; min-width: 0; }
+  .item .s { font-size: 13px; color: var(--sub); }
+  .item .s.acc { color: var(--accent); }
+  .sub { border: 1px solid var(--line); border-radius: 14px; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .back { margin: 0 0 10px; }
+  table.pts { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.pts td { padding: 5px 4px; border-top: 1px solid var(--line); }
+  table.pts td:last-child { text-align: right; white-space: nowrap; }
+  details summary { cursor: pointer; color: var(--sub); }
+  #login { max-width: 320px; margin: 18vh auto; text-align: center; display: none; padding: 0 16px; }
+  #login input { font: 28px/1 monospace; letter-spacing: 8px; text-align: center; width: 100%; padding: 12px; border-radius: 12px; border: 0; background: var(--card); margin: 16px 0; }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--card2); padding: 10px 16px; border-radius: 12px; display: none; max-width: 90vw; z-index: 9; box-shadow: 0 4px 20px rgba(0,0,0,.3); }
+  .empty { color: var(--sub); padding: 8px 2px; }
+  .days { display: flex; gap: 4px; flex-wrap: wrap; }
+  .days label { display: flex; flex-direction: column; align-items: center; font-size: 12px; color: var(--sub); }
+  .muted { color: var(--sub); font-size: 14px; }
+  code { background: var(--card2); padding: 1px 5px; border-radius: 6px; }
 </style>
 </head>
 <body>
@@ -59,17 +86,16 @@
   <h2>IoT Хаб</h2>
   <p class="pill">Введи PIN-код хаба (його показала команда встановлення, або виконай на Pi: <code>sudo iot-hub-pin</code>)</p>
   <input id="pin" inputmode="numeric" maxlength="6" autocomplete="one-time-code">
-  <button id="loginBtn">Увійти</button>
+  <button id="loginBtn" class="primary">Увійти</button>
   <p id="loginErr" class="status bad"></p>
 </div>
 <div id="app" style="display:none">
   <header>
-    <h1 id="title">Мої пристрої</h1>
+    <h1 id="title">IoT Хаб</h1>
     <span class="pill"><span id="conn" class="dot"></span><span id="connText">підключення…</span></span>
-    <button id="editBtn" class="ghost">Налаштувати</button>
   </header>
-  <main id="grid"></main>
-  <section class="rules" id="rulesBox"></section>
+  <nav class="tabs" id="tabs"></nav>
+  <div id="view"></div>
 </div>
 <div class="toast" id="toast"></div>
 
@@ -77,43 +103,79 @@
 "use strict";
 const qs = new URLSearchParams(location.search);
 if (qs.has("kiosk")) document.documentElement.classList.add("kiosk");
-let ws, devices = [], states = {}, dash = {}, rules = [], armed = [], rstatus = {}, editing = false, reqId = 1;
-const busy = new Set();
-
+let ws, devices = [], states = {}, dash = {}, rules = [], armed = [], rstatus = {}, admin = null, reqId = 1;
+let view = { tab: "dev" };          // dev | rules | auto | set ; + detail / edit
+let editing = false, draft = null, espCfg = null, espInfo = null, cloudList = null, scanList = null;
+const busy = new Set(), pending = new Map();
 const $ = (id) => document.getElementById(id);
-function toast(t) { const e = $("toast"); e.textContent = t; e.style.display = "block"; clearTimeout(toast.h); toast.h = setTimeout(() => e.style.display = "none", 3500); }
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+function toast(t) { const e = $("toast"); e.textContent = t; e.style.display = "block"; clearTimeout(toast.h); toast.h = setTimeout(() => e.style.display = "none", 4000); }
 function fmtW(v) { if (v == null) return "—"; return Math.abs(v) >= 1000 ? (v / 1000).toFixed(2) + " кВт" : Math.round(v) + " Вт"; }
-function fmt(v, unit, d = 1) { return v == null ? "—" : (Number.isInteger(v) ? v : v.toFixed(d)) + (unit ? " " + unit : ""); }
-function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function fmt(v, unit, d = 1) { return v == null ? "—" : (typeof v === "number" ? (Number.isInteger(v) ? v : v.toFixed(d)) : v) + (unit ? " " + unit : ""); }
+const hhmm = (m) => String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+const fromHHMM = (s) => { const [h, m] = String(s || "0:0").split(":").map(Number); return (h || 0) * 60 + (m || 0); };
+const DAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"];
+const daysText = (d) => !d ? "один раз" : d === 127 ? "щодня" : d === 31 ? "Пн–Пт" : d === 96 ? "Сб–Нд" : DAYS.filter((_, i) => d & (1 << i)).join(", ");
 
+// ------------------------------------------------------------------ зв'язок
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => { $("conn").className = "dot ok"; $("connText").textContent = "хаб на зв'язку"; };
+  ws.onopen = () => { setConn(true); };
   ws.onclose = () => {
-    $("conn").className = "dot"; $("connText").textContent = "немає зв'язку";
+    setConn(false, "немає зв'язку");
+    for (const p of pending.values()) p.reject(new Error("Зв'язок обірвався"));
+    pending.clear();
     fetch("/ws").then((r) => { if (r.status === 401) showLogin(); else setTimeout(connect, 2000); }).catch(() => setTimeout(connect, 3000));
   };
   ws.onmessage = (e) => {
     if (e.data === "pong") return;
     const m = JSON.parse(e.data);
-    if (m.t === "hello") { devices = m.devices || []; dash = m.dash || {}; $("connText").dataset.hub = m.name || ""; render(); }
-    else if (m.t === "snapshot") { states = m.states || {}; render(); }
-    else if (m.t === "state") { states[m.key] = m.state; busy.delete(m.key); renderCard(m.key); }
-    else if (m.t === "rules") { rules = m.rules || []; armed = m.armed || []; rstatus = m.status || {}; renderRules(); }
-    else if (m.t === "rule_status") { rstatus[m.id] = m.status; armed = m.armed || armed; renderRules(); }
-    else if (m.t === "ack" && !m.ok) toast(m.error || "Помилка");
+    if (m.t === "hello") { devices = m.devices || []; dash = m.dash || {}; $("title").textContent = m.name ? "IoT Хаб · " + m.name : "IoT Хаб"; if (!admin) loadAdmin(); softRender(); }
+    else if (m.t === "snapshot") { states = m.states || {}; softRender(); }
+    else if (m.t === "state") { states[m.key] = m.state; busy.delete(m.key); refreshLive(m.key); }
+    else if (m.t === "rules") { rules = m.rules || []; armed = m.armed || []; rstatus = m.status || {}; if (view.tab === "rules" && !view.rule) softRender(); }
+    else if (m.t === "rule_status") { rstatus[m.id] = m.status; armed = m.armed || armed; const el = document.getElementById("rs_" + m.id); if (el) el.textContent = ruleStatusText(rules.find((r) => r.id === m.id)); }
+    else if (m.t === "ack") {
+      const p = pending.get(m.id);
+      if (p) { pending.delete(m.id); m.ok ? p.resolve(m) : p.reject(new Error(m.error || "Помилка")); }
+      else if (!m.ok) toast(m.error || "Помилка");
+    }
     else if (m.t === "notify") toast(`${m.title}: ${m.text}`);
     else if (m.t === "hub") {   // поза домом, через ретранслятор: чи на зв'язку сама Pi
-      $("conn").className = m.online ? "dot ok" : "dot";
-      $("connText").textContent = m.online ? "хаб на зв'язку" : "Raspberry Pi не на зв'язку";
+      setConn(m.online, m.online ? null : "Raspberry Pi не на зв'язку");
       if (m.online) ws.send(JSON.stringify({ t: "get" }));
     }
   };
 }
-// тримаємо з'єднання живим (ретранслятор Cloudflare закриває мовчазні з'єднання)
-setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 30000);
-function send(m) { if (ws && ws.readyState === 1) { m.id = reqId++; ws.send(JSON.stringify(m)); } else toast("Немає зв'язку з хабом"); }
+function setConn(ok, text) { $("conn").className = ok ? "dot ok" : "dot"; $("connText").textContent = text || (ok ? "хаб на зв'язку" : "немає зв'язку"); }
+setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 25000);
+function send(m) { if (ws && ws.readyState === 1) { m.id = reqId++; ws.send(JSON.stringify(m)); return true; } toast("Немає зв'язку з хабом"); return false; }
+function call(t, body = {}, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    if (!ws || ws.readyState !== 1) return reject(new Error("Немає зв'язку з хабом"));
+    const id = reqId++;
+    pending.set(id, { resolve, reject });
+    ws.send(JSON.stringify(Object.assign({ t, id }, body)));
+    setTimeout(() => { if (pending.delete(id)) reject(new Error("Хаб не відповів")); }, timeoutMs);
+  });
+}
+async function act(btn, fn, okText) {
+  if (btn) btn.disabled = true;
+  try { const r = await fn(); if (r && r.admin) admin = r.admin; if (okText) toast(okText); return r; }
+  catch (e) { toast(e.message); }
+  finally { if (btn) btn.disabled = false; }
+}
+async function loadAdmin() { try { admin = await call("admin_get"); softRender(); } catch (e) { /* повторимо пізніше */ } }
+// не перемальовувати, поки людина щось вводить (інакше зітре введене)
+function softRender() {
+  const a = document.activeElement;
+  if (a && $("view").contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && view.tab !== "dev") { softRender.later = true; return; }
+  if (view.tab === "dev" && view.key && dev(view.key) && (dev(view.key).kind === "esp" || dev(view.key).kind === "tuya") && a && /^(INPUT|SELECT)$/.test(a.tagName)) { refreshLive(view.key); return; }
+  render();
+}
+document.addEventListener("focusout", () => setTimeout(() => { if (softRender.later && !/^(INPUT|SELECT|TEXTAREA)$/.test((document.activeElement || {}).tagName || "")) { softRender.later = false; render(); } }, 300));
 
 function showLogin() { $("app").style.display = "none"; $("login").style.display = "block"; $("pin").focus(); }
 $("loginBtn").onclick = async () => {
@@ -123,117 +185,509 @@ $("loginBtn").onclick = async () => {
 };
 $("pin").addEventListener("keydown", (e) => { if (e.key === "Enter") $("loginBtn").click(); });
 
-// ---- порядок і приховані (налаштовується тут або з телефона)
-function ordered() {
-  const order = dash.order || [], hidden = new Set(dash.hidden || []);
-  const list = [...devices].sort((a, b) => {
-    const ia = order.indexOf(a.key), ib = order.indexOf(b.key);
-    return (ia < 0 ? 1e6 : ia) - (ib < 0 ? 1e6 : ib);
-  });
-  return editing ? list : list.filter((d) => !hidden.has(d.key));
-}
-$("editBtn").onclick = () => { editing = !editing; $("editBtn").textContent = editing ? "Готово" : "Налаштувати"; if (!editing) saveDash(); render(); };
-function saveDash() { send({ t: "dash_set", dash }); }
-function move(key, dir) {
-  const keys = ordered().map((d) => d.key); const i = keys.indexOf(key), j = i + dir;
-  if (j < 0 || j >= keys.length) return; [keys[i], keys[j]] = [keys[j], keys[i]]; dash.order = keys; render();
-}
-function hide(key) { const h = new Set(dash.hidden || []); h.has(key) ? h.delete(key) : h.add(key); dash.hidden = [...h]; render(); }
-
-function render() {
-  const g = $("grid"); g.innerHTML = "";
-  const list = ordered();
-  if (!list.length) { g.innerHTML = `<div class="empty">Пристроїв ще немає. Додай їх у додатку на телефоні — вони з'являться тут.</div>`; return; }
-  for (const d of list) { const c = document.createElement("div"); c.className = "card"; c.id = "c_" + d.key; g.appendChild(c); renderCard(d.key); }
-}
-
-function toggleBtn(key, on, comp) {
-  return `<div class="toggle ${on ? "on" : ""} ${busy.has(key) ? "busy" : ""}" data-key="${esc(key)}" data-comp="${comp ?? -1}" data-on="${on ? 1 : 0}"></div>`;
-}
-document.addEventListener("click", (e) => {
-  const t = e.target.closest(".toggle"); if (!t || !t.dataset.key) return;   // перемикачі правил — окремо
-  busy.add(t.dataset.key); t.classList.add("busy");
-  send({ t: "switch", key: t.dataset.key, on: t.dataset.on !== "1", comp: Number(t.dataset.comp) });
-  setTimeout(() => { if (busy.delete(t.dataset.key)) renderCard(t.dataset.key); }, 5000);
-});
-
-function tuyaVals(st) {
-  // хаб рахує значення сам (знає номери DP і масштаби кожної розетки)
-  const v = (st && st.vals) || {};
-  return { on: v.on === true, power: v.power ?? null, voltage: v.voltage ?? null, current: v.current ?? null };
-}
-
+// ------------------------------------------------------------------ дані пристроїв
+const realDevices = () => devices.filter((d) => d.kind !== "hub");
+const dev = (key) => devices.find((x) => x.key === key);
+const nameOf = (key) => (dev(key) || {}).name || (key ? "?" : "—");
+function tuyaVals(st) { const v = (st && st.vals) || {}; return { on: v.on === true, power: v.power ?? null, voltage: v.voltage ?? null, current: v.current ?? null }; }
 function invSummary(pts) {
   const m = {}; for (const p of pts) m[String(p.title).toLowerCase().replace(/\s+/g, " ").trim()] = p;
   const n = (...ks) => { for (const k of ks) if (m[k] && !isNaN(parseFloat(m[k].val))) return parseFloat(m[k].val); return null; };
   const w = (...ks) => { for (const k of ks) if (m[k] && !isNaN(parseFloat(m[k].val))) return parseFloat(m[k].val) * (String(m[k].unit).toLowerCase() === "kw" ? 1000 : 1); return null; };
-  let pv = w("pv total power", "pv power", "total pv power", "pv input power", "solar power");
+  let pv = w("pv total power", "pv power", "total pv power", "pv input power", "solar power", "dc output power");
   if (pv == null) { const parts = Object.keys(m).filter((k) => /^pv\d (input |charging |charger )?power$/.test(k)).map((k) => w(k)).filter((x) => x != null); pv = parts.length ? parts.reduce((a, b) => a + b, 0) : null; }
   const gridV = n("ac input voltage", "grid voltage", "mains voltage");
+  const bv = n("battery voltage", "bms battery voltage"), chg = n("battery charging current", "pv charging current"), dis = n("battery discharge current");
+  let batt = w("battery power"); if (batt == null && bv != null && (chg != null || dis != null)) batt = bv * ((chg || 0) - (dis || 0));
   const modeRaw = ["working state", "operating mode", "work state", "work mode", "mode"].map((k) => m[k] && m[k].val).find((v) => v);
   const ml = String(modeRaw || "").toLowerCase();
-  const mode = !modeRaw ? null : /line|grid|bypass/.test(ml) ? "Від мережі" : /battery/.test(ml) ? "Від батареї" : /standby/.test(ml) ? "Очікування" : /fault/.test(ml) ? "Аварія" : modeRaw;
-  return { pv, soc: n("battery capacity", "soc", "state of charge", "battery soc"), load: w("output active power", "ac output active power", "load power"),
-    bv: n("battery voltage"), gridV, grid: gridV == null ? null : gridV > 100, mode };
+  const mode = !modeRaw ? null : /line|grid|bypass/.test(ml) ? "Від мережі" : /battery/.test(ml) ? "Від батареї" : /standby/.test(ml) ? "Очікування" : /fault/.test(ml) ? "Аварія" : /charg/.test(ml) ? "Заряд" : modeRaw;
+  return { pv, soc: n("battery capacity", "soc", "state of charge", "battery soc", "bms soc"),
+    load: w("output active power", "ac output active power", "active power", "load power", "load active power"),
+    loadPct: n("ac output load", "load percent", "output load percent", "load percentage", "output load"),
+    bv, batt, gridV, grid: gridV == null ? null : gridV > 100, mode };
+}
+const comps = (key) => ((states[key] || {}).state || {}).comps || [];
+const OUT_TYPES = ["relay", "pwm", "ws2812", "tuya"], TEMP_TYPES = ["dht", "ds18b20", "aht", "bme", "sht21", "thermo"];
+
+// показники для умов правил (як у додатку)
+function metricsOf(key) {
+  const d = dev(key); if (!d) return [];
+  if (d.kind === "inv") {
+    const base = [["grid", "Мережа є", "", "B"], ["mode", "Режим", "", "T"], ["soc", "Заряд батареї", "%", "N"], ["pv", "Сонце", "Вт", "N"],
+      ["load", "Навантаження", "Вт", "N"], ["loadPct", "Навантаження", "%", "N"], ["gridV", "Напруга мережі", "В", "N"],
+      ["batt", "Батарея (+заряд/−розряд)", "Вт", "N"], ["bv", "Напруга батареї", "В", "N"]];
+    const pts = ((states[key] || {}).points || []).map((p) => ["pt:" + p.title, p.title, p.unit || "", isNaN(parseFloat(p.val)) ? "T" : "N"]);
+    return base.concat(pts);
+  }
+  if (d.kind === "hub") return [["temp", "Температура процесора", "°C", "N"]];
+  if (d.kind === "tuya") return [["on", "Увімкнено", "", "B"], ["power", "Потужність", "Вт", "N"], ["current", "Струм", "А", "N"], ["voltage", "Напруга", "В", "N"], ["online", "На зв'язку", "", "B"]];
+  const out = [["online", "На зв'язку", "", "B"]];
+  for (const c of comps(key)) {
+    const p = "c" + c.i;
+    if (OUT_TYPES.includes(c.t)) out.push([p + ":on", c.name + ": увімкнено", "", "B"]);
+    if (["dht", "aht", "bme", "ds18b20", "sht21", "thermo"].includes(c.t)) out.push([p + ":temp", c.name + ": температура", "°C", "N"]);
+    if (["dht", "aht", "bme", "sht21"].includes(c.t)) out.push([p + ":hum", c.name + ": вологість", "%", "N"]);
+    if (c.t === "bme") out.push([p + ":pres", c.name + ": тиск", "гПа", "N"]);
+    if (c.t === "analog") out.push([p + ":pct", c.name, "%", "N"]);
+    if (c.t === "input" || c.t === "button") out.push([p + ":active", c.name + ": активний", "", "B"]);
+  }
+  return out;
+}
+function valueOf(key, metric) {
+  const d = dev(key), st = states[key];
+  if (!d) return null;
+  if (d.kind === "hub") return admin && admin.hub ? admin.hub.cpuTemp : null;
+  if (!st) return null;
+  if (metric === "online") return !!st.online;
+  if (!st.online) return null;
+  if (d.kind === "inv") {
+    if (metric.startsWith("pt:")) { const p = (st.points || []).find((x) => x.title === metric.slice(3)); return p ? (isNaN(parseFloat(p.val)) ? p.val : parseFloat(p.val)) : null; }
+    return invSummary(st.points || [])[metric] ?? null;
+  }
+  if (d.kind === "tuya") return (st.vals || {})[metric] ?? null;
+  const [ci, f] = metric.slice(1).split(":"); const c = comps(key).find((x) => x.i === Number(ci));
+  return c ? (c[f] ?? null) : null;
+}
+const fmtVal = (v, unit) => v == null ? "немає даних" : typeof v === "boolean" ? (v ? "так" : "ні") : fmt(v, unit, 2);
+
+// ------------------------------------------------------------------ розмітка
+const TABS = [["dev", "Пристрої"], ["rules", "Правила"], ["auto", "Термостати й розклади"], ["set", "Налаштування"]];
+function go(tab, extra = {}) { view = Object.assign({ tab }, extra); espCfg = null; espInfo = null; if (!extra.keepDraft) draft = null; render(); window.scrollTo(0, 0); }
+function render() {
+  $("tabs").innerHTML = TABS.map(([k, l]) => `<button class="${view.tab === k ? "sel" : ""}" onclick="go('${k}')">${l}</button>`).join("");
+  const v = $("view");
+  if (view.tab === "dev") v.innerHTML = view.key ? deviceView(view.key) : gridView();
+  else if (view.tab === "rules") v.innerHTML = view.rule ? ruleEditor() : rulesView();
+  else if (view.tab === "auto") v.innerHTML = autoView();
+  else v.innerHTML = settingsView();
+  if (view.tab === "dev" && !view.key) realDevices().forEach((d) => renderCard(d.key));
+}
+function refreshLive(key) {
+  if (view.tab === "dev" && !view.key) { renderCard(key); return; }
+  if (view.tab === "dev" && view.key === key) { const el = $("live"); if (el) el.innerHTML = liveBlock(key); }
 }
 
-function renderCard(key) {
-  const c = document.getElementById("c_" + key); if (!c) return;
-  const d = devices.find((x) => x.key === key) || { name: key, kind: "?" };
-  const st = states[key]; const online = st && st.online;
-  const hidden = (dash.hidden || []).includes(key);
-  let html = `<div class="head"><div class="name">${esc(d.name)}</div>`;
-  if (editing) html += `<div class="edit"><button onclick="move('${esc(key)}',-1)">↑</button><button onclick="move('${esc(key)}',1)">↓</button><button onclick="hide('${esc(key)}')">${hidden ? "Показати" : "Сховати"}</button></div>`;
-  let body = "", isOn = false;
+// ---------------- плитки
+function ordered() {
+  const order = dash.order || [], hidden = new Set(dash.hidden || []);
+  const list = realDevices().sort((a, b) => { const ia = order.indexOf(a.key), ib = order.indexOf(b.key); return (ia < 0 ? 1e6 : ia) - (ib < 0 ? 1e6 : ib); });
+  return editing ? list : list.filter((d) => !hidden.has(d.key));
+}
+function gridView() {
+  const list = ordered();
+  const top = `<div class="row" style="padding:0 16px 8px;justify-content:flex-end"><button class="ghost" onclick="toggleEdit()">${editing ? "Готово" : "Порядок і видимість"}</button></div>`;
+  if (!list.length) return top + `<div class="page"><div class="card"><b>Пристроїв ще немає</b><div class="muted">Додай їх у «Налаштування» → «Пристрої»: плати ESP шукаються в мережі, розетки Tuya — з хмари Tuya або вручну, інвертор — через акаунт SmartESS.</div><div><button class="primary" onclick="go('set')">Додати пристрій</button></div></div></div>`;
+  return top + `<main class="grid">${list.map((d) => `<div class="card" id="c_${esc(d.key)}"></div>`).join("")}</main>`;
+}
+function toggleEdit() { editing = !editing; if (!editing) send({ t: "dash_set", dash }); render(); }
+function moveTile(key, dir) { const keys = ordered().map((d) => d.key); const i = keys.indexOf(key), j = i + dir; if (j < 0 || j >= keys.length) return; [keys[i], keys[j]] = [keys[j], keys[i]]; dash.order = keys; render(); }
+function hideTile(key) { const h = new Set(dash.hidden || []); h.has(key) ? h.delete(key) : h.add(key); dash.hidden = [...h]; render(); }
+function toggleBtn(key, on, comp) { return `<div class="toggle ${on ? "on" : ""} ${busy.has(key) ? "busy" : ""}" data-key="${esc(key)}" data-comp="${comp ?? -1}" data-on="${on ? 1 : 0}"></div>`; }
+document.addEventListener("click", (e) => {
+  const t = e.target.closest(".toggle[data-key]"); if (!t) return;
+  busy.add(t.dataset.key); t.classList.add("busy");
+  send({ t: "switch", key: t.dataset.key, on: t.dataset.on !== "1", comp: Number(t.dataset.comp) });
+  setTimeout(() => { if (busy.delete(t.dataset.key)) refreshLive(t.dataset.key); }, 5000);
+});
+function tileBody(key) {
+  const d = dev(key) || {}, st = states[key], online = st && st.online;
+  let body = "", isOn = false, head = "";
   if (d.kind === "tuya") {
-    const v = tuyaVals(st); isOn = online && v.on;
-    if (!editing) html += toggleBtn(key, v.on);
-    body = `<div class="big">${online ? (v.on ? fmtW(v.power) : "Вимкнено") : "—"}</div><div class="row">
-      <div class="stat"><b>${fmt(v.voltage, "В")}</b><span>напруга</span></div><div class="stat"><b>${fmt(v.current, "А", 2)}</b><span>струм</span></div></div>`;
+    const v = tuyaVals(st); isOn = online && v.on; head = editing ? "" : toggleBtn(key, v.on);
+    body = `<div class="big">${online ? (v.on ? fmtW(v.power) : "Вимкнено") : "—"}</div><div class="row"><div class="stat"><b>${fmt(v.voltage, "В")}</b><span>напруга</span></div><div class="stat"><b>${fmt(v.current, "А", 2)}</b><span>струм</span></div></div>`;
   } else if (d.kind === "inv") {
     const s = invSummary((st && st.points) || []);
-    body = `<div class="row"><div class="stat"><b>${fmt(s.soc, "%", 0)}</b><span>батарея</span></div><div class="stat"><b>${fmtW(s.pv)}</b><span>сонце</span></div>
-      <div class="stat"><b>${fmtW(s.load)}</b><span>навантаження</span></div><div class="stat"><b>${s.grid == null ? "—" : s.grid ? fmt(s.gridV, "В", 0) : "немає"}</b><span>мережа</span></div></div>
-      <div class="status">${esc(s.mode || "")}${s.bv != null ? " · батарея " + fmt(s.bv, "В") : ""}</div>`;
+    body = `<div class="row"><div class="stat"><b>${fmt(s.soc, "%", 0)}</b><span>батарея</span></div><div class="stat"><b>${fmtW(s.pv)}</b><span>сонце</span></div><div class="stat"><b>${fmtW(s.load)}</b><span>навантаження</span></div><div class="stat"><b>${s.grid == null ? "—" : s.grid ? fmt(s.gridV, "В", 0) : "немає"}</b><span>мережа</span></div></div><div class="status">${esc(s.mode || "")}${s.bv != null ? " · батарея " + fmt(s.bv, "В") : ""}</div>`;
   } else {
-    const comps = (st && st.state && st.state.comps) || [];
-    for (const cp of comps) {
-      const sw = ["relay", "pwm", "ws2812", "tuya"].includes(cp.t);
-      if (sw && cp.on) isOn = true;
-      let val = "";
-      if (cp.temp != null) val += fmt(cp.temp, "°C") + " ";
-      if (cp.hum != null) val += fmt(cp.hum, "%", 0) + " ";
-      if (cp.pres != null) val += Math.round(cp.pres * 0.750062) + " мм ";
-      if (cp.pct != null) val += cp.pct + " % ";
-      if (cp.t === "input" || cp.t === "button") val += cp.active ? "активний" : "спокій";
-      if (cp.t === "thermo") val += cp.state === "on" ? "· гріє" : cp.state === "schedoff" ? "· за розкладом вимк." : "";
-      body += `<div class="comp"><span class="label">${esc(cp.name)}</span><span>${esc(val)}</span>${sw && !editing ? toggleBtn(key, cp.on, cp.i) : ""}</div>`;
+    const cs = comps(key);
+    for (const cp of cs) {
+      const sw = OUT_TYPES.includes(cp.t); if (sw && cp.on) isOn = true;
+      body += `<div class="comp"><span class="label">${esc(cp.name)}</span><span>${esc(compVal(cp))}</span>${sw && !editing ? toggleBtn(key, cp.pending ?? cp.on, cp.i) : ""}</div>`;
     }
-    if (!comps.length) body = `<div class="status">${online ? "Без компонентів" : ""}</div>`;
+    if (!cs.length) body = `<div class="status">${online ? "Без компонентів" : ""}</div>`;
   }
-  html += `</div>` + body;
+  return { body, isOn, head };
+}
+function compVal(cp) {
+  let v = "";
+  if (cp.temp != null) v += fmt(cp.temp, "°C") + " ";
+  if (cp.hum != null) v += fmt(cp.hum, "%", 0) + " ";
+  if (cp.pres != null) v += Math.round(cp.pres * 0.750062) + " мм ";
+  if (cp.pct != null) v += cp.pct + " % ";
+  if (cp.t === "input" || cp.t === "button") v += cp.active ? "активний" : "спокій";
+  if (cp.t === "thermo") v += cp.state === "on" ? "· гріє" : cp.state === "schedoff" ? "· за розкладом вимк." : "";
+  if (cp.cd > 0) v += " ⏱ " + Math.ceil(cp.cd / 60) + " хв";
+  return v;
+}
+function statusLine(key) {
+  const st = states[key], online = st && st.online;
   const ago = st && st.at ? Math.round((Date.now() - st.at) / 60000) : null;
-  html += `<div class="status ${online ? "" : "bad"}">${!st ? "чекаю даних…" : online ? (ago > 5 ? `оновлено ${ago} хв тому` : "") : esc(st.error || "не на зв'язку")}</div>`;
-  c.innerHTML = html;
-  c.classList.toggle("on", !!isOn);
-  c.style.opacity = editing && hidden ? 0.45 : 1;
+  return `<div class="status ${online ? "" : "bad"}">${!st ? "чекаю даних…" : online ? (ago > 5 ? `оновлено ${ago} хв тому` : (st.via === "mqtt" ? "MQTT на Pi" : st.via === "http" ? "Wi-Fi → Pi" : "")) : esc(st.error || "не на зв'язку")}</div>`;
+}
+function renderCard(key) {
+  const c = document.getElementById("c_" + key); if (!c) return;
+  const d = dev(key) || { name: key }, hidden = (dash.hidden || []).includes(key);
+  const { body, isOn, head } = tileBody(key);
+  let html = `<div class="head"><div class="name" onclick="go('dev',{key:'${esc(key)}'})">${esc(d.name)} ›</div>`;
+  if (editing) html += `<button class="small" onclick="moveTile('${esc(key)}',-1)">↑</button><button class="small" onclick="moveTile('${esc(key)}',1)">↓</button><button class="small" onclick="hideTile('${esc(key)}')">${hidden ? "Показати" : "Сховати"}</button>`;
+  c.innerHTML = html + head + `</div>` + body + statusLine(key);
+  c.classList.toggle("on", !!isOn); c.style.opacity = editing && hidden ? 0.45 : 1;
 }
 
-function renderRules() {
-  const b = $("rulesBox");
-  if (!rules.length) { b.innerHTML = ""; return; }
-  b.innerHTML = `<h2>Правила</h2>` + rules.map((r) => `<div class="rule"><div class="t"><div>${esc(r.name)}</div>
-    <div class="s">${r.needsArm ? (armed.includes(r.id) ? "● активне · " : "○ не активне · ") : ""}${esc(r.enabled === false ? "вимкнено" : (rstatus[r.id] || {}).text || "…")}</div></div>
-    <div class="toggle ${r.enabled !== false ? "on" : ""}" style="flex:none" onclick="event.stopPropagation(); toggleRule('${esc(r.id)}')"></div></div>`).join("");
+// ---------------- сторінка пристрою
+function deviceView(key) {
+  const d = dev(key);
+  if (!d) return `<div class="page"><button class="back" onclick="go('dev')">‹ Назад</button><div class="empty">Пристрій не знайдено</div></div>`;
+  let html = `<div class="page stack"><div><button class="back" onclick="go('dev')">‹ Пристрої</button></div>
+    <div class="card"><div class="head"><h3 style="flex:1">${esc(d.name)}</h3></div><div id="live">${liveBlock(key)}</div></div>`;
+  if (d.kind === "tuya") html += tuyaSettings(key);
+  else if (d.kind === "esp") { html += espSettings(key); if (!espCfg) setTimeout(() => loadEsp(key), 0); }
+  else if (d.kind === "inv") html += invSettings(key);
+  return html + `</div>`;
 }
-function toggleRule(id) {
-  const r = rules.find((x) => x.id === id); if (!r) return;
-  r.enabled = r.enabled === false; send({ t: "rules_set", rules }); renderRules();
+function liveBlock(key) {
+  const d = dev(key) || {};
+  if (d.kind === "inv") {
+    const st = states[key] || {}, s = invSummary(st.points || []);
+    return tileBody(key).body + `<details><summary>Усі показники (${(st.points || []).length})</summary><table class="pts">${(st.points || []).map((p) => `<tr><td>${esc(p.title)}</td><td>${esc(p.val)} ${esc(p.unit || "")}</td></tr>`).join("")}</table></details>` + statusLine(key);
+  }
+  if (d.kind !== "esp") { const t = tileBody(key); return `<div class="row" style="align-items:center"><div style="flex:1">${t.body}</div>${t.head}</div>` + statusLine(key); }
+  const cs = comps(key);
+  if (!cs.length) return statusLine(key);
+  return cs.map((c) => espCompControl(key, c)).join("") + statusLine(key);
+}
+function espCmd(key, i, extra) { send({ t: "cmd", key, esp: Object.assign({ i }, extra) }); }
+function espCompControl(key, c) {
+  const k = esc(key);
+  let ctl = "";
+  if (c.t === "relay" || c.t === "tuya") {
+    ctl = toggleBtn(key, c.pending ?? c.on, c.i);
+    if (c.t === "relay") ctl = `<span class="row" style="gap:4px">${[[300, "5 хв"], [1800, "30 хв"], [3600, "1 год"]].map(([s, l]) => `<button class="small" title="Увімкнути на ${l}" onclick="espCmd('${k}',${c.i},{cd:${s}})">${l}</button>`).join("")}${c.cd > 0 ? `<button class="small" onclick="espCmd('${k}',${c.i},{cd:0})">Скасувати таймер</button>` : ""}</span>` + ctl;
+  } else if (c.t === "pwm" || c.t === "ws2812") {
+    ctl = `<input type="range" min="1" max="255" value="${c.bri ?? 255}" onchange="espCmd('${k}',${c.i},{bri:Number(this.value)})">` + toggleBtn(key, c.on, c.i);
+    if (c.t === "ws2812") ctl = `<span class="row" style="gap:4px">${[[255, 255, 255], [255, 140, 40], [255, 0, 0], [0, 200, 0], [0, 80, 255], [180, 0, 255]].map((rgb) => `<button class="small" style="background:rgb(${rgb})" title="колір" onclick="espCmd('${k}',${c.i},{rgb:[${rgb}],fx:'none'})">&nbsp;</button>`).join("")}<select onchange="espCmd('${k}',${c.i},{fx:this.value})">${[["none", "Статично"], ["breathe", "Дихання"], ["rainbow", "Веселка"]].map(([v, l]) => `<option value="${v}" ${(c.fx || "none") === v ? "selected" : ""}>${l}</option>`).join("")}</select></span>` + ctl;
+  } else if (c.t === "thermo") {
+    ctl = `<label class="c"><input type="checkbox" ${c.enabled ? "checked" : ""} onchange="espCmd('${k}',${c.i},{enabled:this.checked})"> працює</label>
+      <label class="f" style="max-width:110px">${c.mode === "cool" ? "увімк. від" : "увімк. до"}<input type="number" step="0.5" value="${c.onAt ?? ""}" onchange="espCmd('${k}',${c.i},{onAt:Number(this.value)})"></label>
+      <label class="f" style="max-width:110px">вимк. при<input type="number" step="0.5" value="${c.offAt ?? ""}" onchange="espCmd('${k}',${c.i},{offAt:Number(this.value)})"></label>
+      ${c.sched && c.sched.hold ? `<button class="small" onclick="espCmd('${k}',${c.i},{resume:true})">За розкладом</button>` : ""}`;
+  }
+  return `<div class="comp"><span class="label">${esc(c.name)} <span class="muted">${esc(compVal(c))}</span></span>${ctl}</div>`;
 }
 
-setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 25000);
-setInterval(() => devices.forEach((d) => renderCard(d.key)), 60000);
+function tuyaSettings(key) {
+  const a = (admin && admin.devices || []).find((x) => x.key === key) || {}, dm = a.dps || {};
+  const num = (id, l, v) => `<label class="f">${l}<input id="${id}" type="number" value="${v ?? ""}"></label>`;
+  return `<div class="card"><h3>Налаштування розетки</h3>
+    <div class="row"><label class="f">Назва<input id="tName" value="${esc(a.name || nameOf(key))}"></label><label class="f">IP у мережі<input id="tIp" value="${esc(a.ip || "")}" placeholder="порожньо — знайде сам"></label></div>
+    <div class="row"><label class="f">Версія протоколу<select id="tVer">${["3.1", "3.3", "3.4", "3.5"].map((v) => `<option ${String(a.version || "3.3") === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+      <label class="f">ID пристрою<input value="${esc(a.deviceId || "")}" disabled></label><label class="f">Local key<input id="tKey" placeholder="не змінювати"></label></div>
+    <details><summary>Номери точок даних (DP)</summary><div class="row" style="margin-top:8px">${num("dSw", "Перемикач", dm.switch)}${num("dPw", "Потужність", dm.power)}${num("dCu", "Струм", dm.current)}${num("dVo", "Напруга", dm.voltage)}</div>
+      <div class="row">${num("sPw", "Потужність ÷10^", dm.powerScale)}${num("sCu", "Струм ÷10^", dm.currentScale)}${num("sVo", "Напруга ÷10^", dm.voltageScale)}</div></details>
+    <div class="row"><button class="primary" onclick="saveTuya('${esc(key)}',this)">Зберегти</button><button class="danger" onclick="removeDevice('${esc(key)}',this)">Видалити з хаба</button></div></div>`;
+}
+async function saveTuya(key, btn) {
+  const a = (admin.devices || []).find((x) => x.key === key) || {}, n = (id, def) => { const v = $(id).value; return v === "" ? def : Number(v); }, dm = a.dps || {};
+  const device = { key, kind: "TUYA", name: $("tName").value, ip: $("tIp").value.trim(), version: $("tVer").value, localKey: $("tKey").value.trim(),
+    dps: Object.assign({}, dm, { switch: n("dSw", 1), power: n("dPw", 19), current: n("dCu", 18), voltage: n("dVo", 20), powerScale: n("sPw", 1), currentScale: n("sCu", 3), voltageScale: n("sVo", 1) }) };
+  if (await act(btn, () => call("device_save", { device }), "Збережено")) render();
+}
+async function removeDevice(key, btn) {
+  if (!confirm(`Видалити «${nameOf(key)}» з хаба? Правила з цим пристроєм перестануть працювати.`)) return;
+  if (await act(btn, () => call("device_remove", { key }), "Видалено")) go("dev");
+}
+
+// ---------------- плата ESP: налаштування на самій платі
+async function loadEsp(key) {
+  try { const r = await call("esp_config_get", { key }, 15000); espCfg = r.config; espInfo = r.info; }
+  catch (e) { espCfg = { error: e.message }; }
+  if (view.key === key) render();
+  try { const r = await call("esp_info", { key }, 20000); espInfo = Object.assign({}, espInfo, r.info, { latest: r.latest }); if (view.key === key) { const el = $("fwBox"); if (el) el.innerHTML = fwBlock(key); } } catch (e) { /* ок */ }
+}
+const COMP_TYPES = [["relay", "Реле"], ["button", "Кнопка"], ["pwm", "Світлодіод (PWM)"], ["ws2812", "Стрічка WS2812"], ["dht", "DHT11/DHT22"], ["ds18b20", "DS18B20"],
+  ["aht", "AHT10/AHT20"], ["bme", "BME280/BMP280"], ["sht21", "SHT21/HTU21"], ["analog", "Аналоговий вхід"], ["input", "Цифровий вхід"], ["thermo", "Термостат"], ["tuya", "Розетка Tuya"]];
+const typeLabel = (t) => (COMP_TYPES.find((x) => x[0] === t) || [t, t])[1];
+function espSettings(key) {
+  const k = esc(key);
+  if (!espCfg) return `<div class="card"><h3>Налаштування плати</h3><div class="muted">Читаю налаштування з плати…</div></div>`;
+  if (espCfg.error) return `<div class="card"><h3>Налаштування плати</h3><div class="status bad">${esc(espCfg.error)}</div><div><button onclick="espCfg=null;render()">Ще раз</button> <button class="danger" onclick="removeDevice('${k}',this)">Видалити з хаба</button></div></div>`;
+  const cs = espCfg.comps || [];
+  return `<div class="card"><h3>Налаштування плати</h3>
+    <label class="f">Назва плати<input value="${esc(espCfg.name || "")}" oninput="espCfg.name=this.value"></label>
+    <div class="muted">Компоненти (що під'єднано до плати і на яких пінах):</div>
+    ${cs.map((c, i) => compEditor(c, i, cs)).join("") || `<div class="empty">Компонентів ще немає</div>`}
+    <div class="row"><select id="newType">${COMP_TYPES.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select><button onclick="addComp()">+ Додати компонент</button></div>
+    <div class="row"><button class="primary" onclick="saveEsp('${k}',this)">Зберегти на платі</button><button onclick="act(this,()=>call('esp_reboot',{key:'${k}'}),'Плата перезавантажується')">Перезавантажити</button>
+      <button class="danger" onclick="removeDevice('${k}',this)">Видалити з хаба</button></div></div>
+    <div class="card" id="fwBox">${fwBlock(key)}</div>`;
+}
+function fwBlock(key) {
+  const i = espInfo || {};
+  const upd = i.latest && i.fw && i.latest !== i.fw;
+  return `<h3>Прошивка</h3><div class="muted">На платі: <b>${esc(i.fw || "?")}</b>${i.board ? " · " + esc(i.board) : ""}${i.latest ? " · остання: <b>" + esc(i.latest) + "</b>" : ""}${i.mqttVia ? " · брокер: " + (i.mqttVia === "local" ? "Pi" : "хмара") : ""}${i.rssi ? " · Wi-Fi " + i.rssi + " dBm" : ""}</div>
+    <div><button class="${upd ? "primary" : ""}" onclick="ota('${esc(key)}',this)">${upd ? "Оновити до " + esc(i.latest) : "Перепрошити останньою"}</button></div>
+    <div class="muted">Pi сама завантажить прошивку з GitHub і надішле на плату по Wi-Fi (≈1 хв, плата перезавантажиться).</div>`;
+}
+async function ota(key, btn) {
+  if (!confirm("Оновити прошивку плати? Вона перезавантажиться.")) return;
+  btn.textContent = "Оновлюю… не вимикай плату";
+  const r = await act(btn, () => call("esp_ota", { key }, 200000), "Прошивку надіслано — плата перезавантажується");
+  if (r) setTimeout(() => { espCfg = null; espInfo = null; if (view.key === key) render(); }, 15000); else render();
+}
+function setC(i, f, v) { espCfg.comps[i][f] = v; }
+function addComp() {
+  const t = $("newType").value, base = { t, name: typeLabel(t) };
+  const pins = { relay: { pin: -1, inv: false, po: "off" }, button: { pin: -1, inv: true, pull: true, target: 0 }, pwm: { pin: -1, inv: false }, ws2812: { pin: -1, count: 30 },
+    dht: { pin: -1, model: 22 }, ds18b20: { pin: -1 }, aht: { sda: 6, scl: 7 }, bme: { sda: 6, scl: 7 }, sht21: { sda: 6, scl: 7 }, analog: { pin: 0, inv: false, min: 0, max: 4095 },
+    input: { pin: -1, inv: false, pull: true }, thermo: { sensor: -1, target: 0, mode: "heat", onAt: 18, offAt: 19, enabled: true }, tuya: { dev: "", id: "", key: "", ip: "", ver: "3.3", dp: 1 } };
+  espCfg.comps = (espCfg.comps || []).concat([Object.assign(base, pins[t] || {})]); render();
+}
+function moveComp(i, dir) { const a = espCfg.comps, j = i + dir; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; render(); }
+function delComp(i) { espCfg.comps.splice(i, 1); render(); }
+function compEditor(c, i, all) {
+  const inp = (f, l, type = "number", extra = "") => `<label class="f">${l}<input type="${type}" ${extra} value="${esc(c[f] ?? "")}" onchange="setC(${i},'${f}',${type === "number" ? "Number(this.value)" : "this.value"})"></label>`;
+  const chk = (f, l) => `<label class="c"><input type="checkbox" ${c[f] ? "checked" : ""} onchange="setC(${i},'${f}',this.checked)"> ${l}</label>`;
+  const compSel = (f, l, filter) => `<label class="f">${l}<select onchange="setC(${i},'${f}',Number(this.value))"><option value="-1">—</option>${all.map((x, j) => filter(x) && j !== i ? `<option value="${j}" ${c[f] === j ? "selected" : ""}>${esc(x.name)}</option>` : "").join("")}</select></label>`;
+  let f = "";
+  switch (c.t) {
+    case "relay": f = inp("pin", "Пін") + chk("inv", "інвертований") + `<label class="f">Після подачі живлення<select onchange="setC(${i},'po',this.value)">${[["off", "вимкнено"], ["on", "увімкнено"], ["memory", "як було"]].map(([v, l]) => `<option value="${v}" ${c.po === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>`; break;
+    case "button": f = inp("pin", "Пін") + chk("inv", "активний низький") + chk("pull", "підтяжка") + compSel("target", "Що перемикає", (x) => ["relay", "tuya", "pwm", "ws2812"].includes(x.t)); break;
+    case "pwm": f = inp("pin", "Пін") + chk("inv", "інвертований"); break;
+    case "ws2812": f = inp("pin", "Пін") + inp("count", "Світлодіодів"); break;
+    case "dht": f = inp("pin", "Пін") + `<label class="f">Модель<select onchange="setC(${i},'model',Number(this.value))"><option value="11" ${c.model === 11 ? "selected" : ""}>DHT11</option><option value="22" ${c.model !== 11 ? "selected" : ""}>DHT22</option></select></label>`; break;
+    case "ds18b20": f = inp("pin", "Пін"); break;
+    case "aht": case "bme": case "sht21": f = inp("sda", "SDA") + inp("scl", "SCL"); break;
+    case "analog": f = inp("pin", "Пін") + inp("min", "Мін (сире)") + inp("max", "Макс (сире)") + chk("inv", "інвертувати"); break;
+    case "input": f = inp("pin", "Пін") + chk("inv", "активний низький") + chk("pull", "підтяжка"); break;
+    case "thermo":
+      f = compSel("sensor", "Датчик", (x) => ["dht", "ds18b20", "aht", "bme", "sht21"].includes(x.t)) + compSel("target", "Що вмикати", (x) => ["relay", "tuya"].includes(x.t)) +
+        `<label class="f">Режим<select onchange="setC(${i},'mode',this.value)"><option value="heat" ${c.mode !== "cool" ? "selected" : ""}>Обігрів</option><option value="cool" ${c.mode === "cool" ? "selected" : ""}>Охолодження</option></select></label>` +
+        inp("onAt", "Увімкнути при, °C", "number", 'step="0.5"') + inp("offAt", "Вимкнути при, °C", "number", 'step="0.5"') + chk("enabled", "працює") +
+        `<div class="muted" style="flex-basis:100%">Розклад на платі: ${(c.sched || []).length ? (c.sched || []).map((p) => `${daysText(p.d)} з ${hhmm(p.t)} → ${p.x ? "вимк." : p.temp + " °C"}`).join("; ") : "немає"} <button class="small" onclick="editSched(${i})">Змінити розклад</button></div>`;
+      break;
+    case "tuya": f = `<label class="f">Розетка<select onchange="setC(${i},'dev',this.value)"><option value="">${c.id ? "(як зараз: " + esc(c.id.slice(-6)) + ")" : "— вибери —"}</option>${realDevices().filter((d) => d.kind === "tuya").map((d) => `<option value="${esc(d.key)}" ${c.dev === d.key ? "selected" : ""}>${esc(d.name)}</option>`).join("")}</select></label><div class="muted">Плата сама вмикатиме розетку по Wi-Fi (ключ розетки бере з хаба).</div>`; break;
+    default: f = `<div class="muted">Цей тип редагується лише в додатку</div>`;
+  }
+  return `<div class="sub"><div class="row" style="align-items:center"><b style="flex:1">${esc(typeLabel(c.t))}</b><button class="small" onclick="moveComp(${i},-1)">↑</button><button class="small" onclick="moveComp(${i},1)">↓</button><button class="small danger" onclick="delComp(${i})">Видалити</button></div>
+    <div class="row">${inp("name", "Назва", "text")}${f}</div></div>`;
+}
+function editSched(i) {
+  const c = espCfg.comps[i]; const cur = (c.sched || []).map((p) => `${p.d} ${hhmm(p.t)} ${p.x ? "off" : p.temp}`).join("\n");
+  const txt = prompt("Розклад термостата, по рядку на період:\nдні(біти: 1=Пн … 64=Нд; 127=щодня; 31=Пн–Пт; 96=Сб–Нд) час температура|off\nНапр.: 31 06:30 21\n31 08:30 18\n127 22:00 off", cur || "127 07:00 21\n127 23:00 18");
+  if (txt == null) return;
+  const out = [];
+  for (const line of txt.split("\n")) {
+    const m = line.trim().match(/^(\d+)\s+(\d{1,2}:\d{2})\s+(off|[\d.,]+)$/i); if (!m) continue;
+    const p = { d: Number(m[1]) & 127, t: fromHHMM(m[2]) }; if (/off/i.test(m[3])) p.x = true; else p.temp = Number(m[3].replace(",", ".")); out.push(p);
+  }
+  c.sched = out; render();
+}
+async function saveEsp(key, btn) {
+  const cfg = JSON.parse(JSON.stringify(espCfg));
+  if (await act(btn, () => call("esp_config_set", { key, config: cfg }, 20000), "Збережено на платі")) { espCfg = null; render(); }
+}
+
+// ---------------- інвертор
+function invSettings(key) {
+  const sn = key.slice(4), d = (admin && admin.inverter.devices || []).find((x) => x.sn === sn) || {};
+  return `<div class="card"><h3>Інвертор</h3><div class="row"><label class="f">Назва<input id="invAlias" value="${esc(d.alias || nameOf(key))}"></label><button onclick="act(this,()=>call('inv_rename',{sn:'${esc(sn)}',alias:$('invAlias').value}),'Збережено')">Зберегти</button></div>
+    <div class="muted">Дані беруться з хмари SmartESS (сервер оновлює їх раз на кілька хвилин). Акаунт — у «Налаштування».</div></div>`;
+}
+
+// ------------------------------------------------------------------ правила
+const OPS = [["GT", ">"], ["GE", "≥"], ["LT", "<"], ["LE", "≤"], ["EQ", "="], ["NE", "≠"]];
+const ACTS = [["ON", "Увімкнути"], ["OFF", "Вимкнути"], ["TOGGLE", "Перемкнути"], ["ARM", "Активувати правило"], ["DISARM", "Деактивувати правило"], ["NOTIFY", "Сповіщення (у панелі)"]];
+function condText(c) { const m = metricsOf(c.d).find((x) => x[0] === c.m); return `${nameOf(c.d)}: ${m ? m[1] : c.m} ${(OPS.find((o) => o[0] === c.op) || ["", "≥"])[1]} ${c.v}${m && m[2] ? " " + m[2] : ""}`; }
+function actText(a) { const l = (ACTS.find((x) => x[0] === a.t) || ["", a.t])[1]; if (["ON", "OFF", "TOGGLE"].includes(a.t)) { const cp = a.c >= 0 ? (comps(a.d).find((x) => x.i === a.c) || {}).name : null; return `${l.toLowerCase()} ${nameOf(a.d)}${cp ? " · " + cp : ""}`; } if (["ARM", "DISARM"].includes(a.t)) return `${l.toLowerCase()} «${(rules.find((r) => r.id === a.r) || {}).name || "?"}»`; return "сповіщення"; }
+function ruleStatusText(r) { if (!r) return ""; return (r.needsArm ? (armed.includes(r.id) ? "● активне · " : "○ не активне · ") : "") + (r.enabled === false ? "вимкнено" : ((rstatus[r.id] || {}).text || "…")); }
+function rulesView() {
+  return `<div class="page stack"><div class="card"><div class="head"><h3 style="flex:1">Правила «якщо → то»</h3><button class="primary" onclick="newRule()">+ Нове правило</button></div>
+    <div class="muted">Правила виконує Raspberry Pi цілодобово, без телефона. Поки умови виконуються, «увімкнути/вимкнути» тримають стан: якщо пристрій перемкнули вручну, правило поверне його.</div>
+    <div class="list">${rules.map((r, i) => `<div class="item"><div class="t"><div>${esc(r.name)}</div><div class="s">якщо ${(r.conds || []).map(condText).map(esc).join(r.all === false ? " або " : " і ")}${r.hold ? ` (≥ ${r.hold} с)` : ""} → ${(r.actions || []).map(actText).map(esc).join(", ")}</div><div class="s acc" id="rs_${esc(r.id)}">${esc(ruleStatusText(r))}</div></div>
+      <button class="small" onclick="moveRule(${i},-1)">↑</button><button class="small" onclick="moveRule(${i},1)">↓</button><button class="small" onclick="editRule('${esc(r.id)}')">Змінити</button>
+      <div class="toggle ${r.enabled !== false ? "on" : ""}" onclick="toggleRule('${esc(r.id)}')"></div></div>`).join("") || `<div class="empty">Правил ще немає</div>`}</div></div></div>`;
+}
+function saveRules(list, okText) { return act(null, () => call("rules_set", { rules: list }), okText); }
+function toggleRule(id) { const r = rules.find((x) => x.id === id); if (!r) return; r.enabled = r.enabled === false; saveRules(rules); render(); }
+function moveRule(i, dir) { const j = i + dir; if (j < 0 || j >= rules.length) return; [rules[i], rules[j]] = [rules[j], rules[i]]; saveRules(rules); render(); }
+function newRule() { draft = { id: uid(), name: "Правило", enabled: true, conds: [{ d: "", m: "", op: "GE", v: "" }], all: true, hold: 10, cooldown: 60, needsArm: false, disarmAfter: true, actions: [{ t: "OFF", d: "", c: -1, r: "", x: "" }], from: -1, to: -1 }; go("rules", { rule: draft.id, keepDraft: true }); }
+function editRule(id) { draft = JSON.parse(JSON.stringify(rules.find((r) => r.id === id))); go("rules", { rule: id, keepDraft: true }); }
+function setD(path, v, rerender) { let o = draft; const p = path.split("."); for (let i = 0; i < p.length - 1; i++) o = o[p[i]]; o[p[p.length - 1]] = v; if (rerender) render(); }
+function devOptions(sel, filter = () => true) { return `<option value="">— вибери —</option>` + devices.filter(filter).map((d) => `<option value="${esc(d.key)}" ${sel === d.key ? "selected" : ""}>${esc(d.name)}${d.kind === "inv" ? " (інвертор)" : d.kind === "esp" ? " (плата)" : d.kind === "hub" ? "" : " (розетка)"}</option>`).join(""); }
+function ruleEditor() {
+  const r = draft; if (!r) return "";
+  const exists = rules.some((x) => x.id === r.id);
+  const conds = r.conds.map((c, i) => {
+    const ms = metricsOf(c.d), m = ms.find((x) => x[0] === c.m), kind = m ? m[3] : "N";
+    const valIn = kind === "B" ? `<select onchange="setD('conds.${i}.v',this.value)"><option ${/^(так|true|1)$/i.test(c.v) ? "selected" : ""}>так</option><option ${/^(ні|false|0)$/i.test(c.v) ? "selected" : ""}>ні</option></select>`
+      : `<input list="${kind === "T" ? "modes" : ""}" value="${esc(c.v)}" oninput="setD('conds.${i}.v',this.value)" style="max-width:140px">`;
+    return `<div class="sub"><div class="row"><label class="f">Пристрій<select onchange="setD('conds.${i}.d',this.value);setD('conds.${i}.m','',true)">${devOptions(c.d)}</select></label>
+      <label class="f">Показник<select onchange="setD('conds.${i}.m',this.value,true)"><option value="">—</option>${ms.map((x) => `<option value="${esc(x[0])}" ${c.m === x[0] ? "selected" : ""}>${esc(x[1])}${x[2] ? ", " + esc(x[2]) : ""}</option>`).join("")}</select></label>
+      <label class="f" style="max-width:90px">Умова<select onchange="setD('conds.${i}.op',this.value)">${(kind === "N" ? OPS : OPS.filter((o) => o[0] === "EQ" || o[0] === "NE")).map(([v, l]) => `<option value="${v}" ${c.op === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      <label class="f" style="max-width:150px">Значення${valIn}</label>${r.conds.length > 1 ? `<button class="small danger" onclick="draft.conds.splice(${i},1);render()">✕</button>` : ""}</div>
+      ${c.d && c.m ? `<div class="muted">Зараз: ${esc(fmtVal(valueOf(c.d, c.m), m ? m[2] : ""))}</div>` : ""}</div>`;
+  }).join("");
+  const acts = r.actions.map((a, i) => {
+    let f = "";
+    if (["ON", "OFF", "TOGGLE"].includes(a.t)) {
+      f = `<label class="f">Пристрій<select onchange="setD('actions.${i}.d',this.value);setD('actions.${i}.c',-1,true)">${devOptions(a.d, (d) => d.kind === "tuya" || d.kind === "esp")}</select></label>`;
+      if ((dev(a.d) || {}).kind === "esp") f += `<label class="f">Що саме<select onchange="setD('actions.${i}.c',Number(this.value))"><option value="-1">перший вихід</option>${comps(a.d).filter((x) => OUT_TYPES.includes(x.t)).map((x) => `<option value="${x.i}" ${a.c === x.i ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>`;
+    } else if (["ARM", "DISARM"].includes(a.t)) f = `<label class="f">Правило<select onchange="setD('actions.${i}.r',this.value)"><option value="">—</option>${rules.filter((x) => x.id !== r.id).map((x) => `<option value="${esc(x.id)}" ${a.r === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>`;
+    else f = `<label class="f">Текст<input value="${esc(a.x)}" oninput="setD('actions.${i}.x',this.value)"></label>`;
+    return `<div class="sub"><div class="row"><label class="f" style="max-width:220px">Дія<select onchange="setD('actions.${i}.t',this.value,true)">${ACTS.map(([v, l]) => `<option value="${v}" ${a.t === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>${f}${r.actions.length > 1 ? `<button class="small danger" onclick="draft.actions.splice(${i},1);render()">✕</button>` : ""}</div></div>`;
+  }).join("");
+  const win = r.from >= 0 && r.to >= 0;
+  return `<div class="page stack"><div><button class="back" onclick="go('rules')">‹ Правила</button></div>
+    <datalist id="modes"><option>Від мережі</option><option>Від батареї</option><option>Очікування</option><option>Аварія</option><option>Заряд</option></datalist>
+    <div class="card"><label class="f">Назва<input value="${esc(r.name)}" oninput="setD('name',this.value)"></label><label class="c"><input type="checkbox" ${r.enabled !== false ? "checked" : ""} onchange="setD('enabled',this.checked)"> правило працює</label></div>
+    <div class="card"><div class="head"><h3 style="flex:1">Якщо</h3><select onchange="setD('all',this.value==='all')"><option value="all" ${r.all !== false ? "selected" : ""}>усі умови</option><option value="any" ${r.all === false ? "selected" : ""}>будь-яка умова</option></select></div>
+      ${conds}<div><button onclick="draft.conds.push({d:'',m:'',op:'GE',v:''});render()">+ Умова</button></div></div>
+    <div class="card"><h3>То</h3>${acts}<div><button onclick="draft.actions.push({t:'OFF',d:'',c:-1,r:'',x:''});render()">+ Дія</button></div></div>
+    <div class="card"><h3>Тонкі налаштування</h3>
+      <div class="row"><label class="f">Умови мають триматися, с<input type="number" min="0" value="${r.hold ?? 10}" oninput="setD('hold',Number(this.value))"></label><label class="f">Мінімальна пауза між спрацюваннями, с<input type="number" min="0" value="${r.cooldown ?? 60}" oninput="setD('cooldown',Number(this.value))"></label></div>
+      <div class="muted">Поки умови виконуються, «увімкнути/вимкнути» тримають стан: якщо пристрій перемкнули вручну, правило поверне його через «триматися» секунд (і не раніше паузи після попереднього спрацювання). Сповіщення й активації — один раз, доки умови не стануть хибними.</div>
+      <label class="c"><input type="checkbox" ${win ? "checked" : ""} onchange="setD('from',this.checked?480:-1);setD('to',this.checked?1320:-1,true)"> лише в певний час</label>
+      ${win ? `<div class="row"><label class="f">з<input type="time" value="${hhmm(r.from)}" onchange="setD('from',fromHHMM(this.value))"></label><label class="f">до<input type="time" value="${hhmm(r.to)}" onchange="setD('to',fromHHMM(this.value))"></label></div>` : ""}
+      <label class="c"><input type="checkbox" ${r.needsArm ? "checked" : ""} onchange="setD('needsArm',this.checked,true)"> крок ланцюжка: працює лише після активації іншим правилом</label>
+      ${r.needsArm ? `<label class="c"><input type="checkbox" ${r.disarmAfter !== false ? "checked" : ""} onchange="setD('disarmAfter',this.checked)"> після спрацювання знову чекати активації</label>` : ""}</div>
+    <div class="row"><button class="primary" onclick="saveRule(this)">Зберегти</button>${exists ? `<button class="danger" onclick="deleteRule(this)">Видалити</button>` : ""}<button class="ghost" onclick="go('rules')">Скасувати</button></div></div>`;
+}
+async function saveRule(btn) {
+  const r = draft;
+  r.conds = r.conds.filter((c) => c.d && c.m);
+  if (!r.conds.length) { r.conds = [{ d: "", m: "", op: "GE", v: "" }]; return toast("Додай хоча б одну умову"); }
+  const list = rules.slice(); const i = list.findIndex((x) => x.id === r.id); if (i >= 0) list[i] = r; else list.push(r);
+  if (await saveRules(list, "Правило збережено")) { rules = list; go("rules"); }
+}
+async function deleteRule(btn) {
+  if (!confirm("Видалити правило?")) return;
+  const list = rules.filter((x) => x.id !== draft.id);
+  if (await saveRules(list, "Видалено")) { rules = list; go("rules"); }
+}
+
+// ------------------------------------------------------------------ термостати й розклади
+function autoView() {
+  if (!admin) return `<div class="page"><div class="muted">Завантаження…</div></div>`;
+  const th = admin.thermostats || [], sc = admin.schedules || [], st = admin.thermoStatus || {};
+  const tEdit = view.thermo, sEdit = view.sched;
+  return `<div class="page stack">
+    <div class="card"><div class="head"><h3 style="flex:1">Термостати</h3><button onclick="go('auto',{thermo:'new'})">+ Додати</button></div>
+      <div class="muted">Датчик температури плати ESP керує розеткою чи реле. Виконує Pi. (Термостат прямо на платі — у налаштуваннях плати, він працює навіть без Pi.)</div>
+      ${tEdit ? thermoForm(tEdit === "new" ? null : th.find((x) => x.id === tEdit)) : ""}
+      <div class="list">${th.map((t) => `<div class="item"><div class="t"><div>${esc(t.name)}</div><div class="s">${esc(nameOf(t.sensorKey))} → ${esc(nameOf(t.targetKey))} · ${t.mode === "COOL" ? `≥ ${t.onAt} °C увімк., ≤ ${t.offAt} °C вимк.` : `≤ ${t.onAt} °C увімк., ≥ ${t.offAt} °C вимк.`}</div><div class="s acc">${esc(t.enabled === false ? "вимкнено" : st[t.id] || "")}</div></div><button class="small" onclick="go('auto',{thermo:'${esc(t.id)}'})">Змінити</button></div>`).join("") || `<div class="empty">Немає</div>`}</div></div>
+    <div class="card"><div class="head"><h3 style="flex:1">Розклади</h3><button onclick="go('auto',{sched:'new'})">+ Додати</button></div>
+      <div class="muted">Увімкнути чи вимкнути пристрій у певний час. Виконує Pi.</div>
+      ${sEdit ? schedForm(sEdit === "new" ? null : sc.find((x) => x.id === sEdit)) : ""}
+      <div class="list">${sc.slice().sort((a, b) => a.hour * 60 + a.minute - b.hour * 60 - b.minute).map((s) => `<div class="item"><div class="t"><div>${hhmm(s.hour * 60 + s.minute)} · ${s.turnOn ? "увімкнути" : "вимкнути"} ${esc(nameOf(s.deviceKey))}</div><div class="s">${daysText(s.days)}${s.enabled === false ? " · вимкнено" : ""}</div></div><button class="small" onclick="go('auto',{sched:'${esc(s.id)}'})">Змінити</button></div>`).join("") || `<div class="empty">Немає</div>`}</div></div></div>`;
+}
+function thermoForm(t) {
+  t = t || { id: uid(), name: "Термостат", enabled: true, sensorKey: "", sensorIndex: 0, targetKey: "", mode: "HEAT", onAt: 18, offAt: 19 };
+  const sensors = realDevices().filter((d) => d.kind === "esp");
+  const sc = comps(t.sensorKey).filter((c) => c.temp !== undefined || TEMP_TYPES.includes(c.t));
+  return `<div class="sub" id="thForm" data-id="${esc(t.id)}"><div class="row"><label class="f">Назва<input id="thName" value="${esc(t.name)}"></label><label class="c"><input id="thOn" type="checkbox" ${t.enabled !== false ? "checked" : ""}> працює</label></div>
+    <div class="row"><label class="f">Плата з датчиком<select id="thSensor" onchange="thermoRedraw()">${devOptions(t.sensorKey, (d) => sensors.includes(d))}</select></label>
+      <label class="f">Датчик<select id="thIdx">${sc.map((c) => `<option value="${c.i}" ${t.sensorIndex === c.i ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select></label>
+      <label class="f">Що вмикати<select id="thTarget">${devOptions(t.targetKey, (d) => d.kind === "tuya" || d.kind === "esp")}</select></label></div>
+    <div class="row"><label class="f">Режим<select id="thMode"><option value="HEAT" ${t.mode !== "COOL" ? "selected" : ""}>Обігрів</option><option value="COOL" ${t.mode === "COOL" ? "selected" : ""}>Охолодження</option></select></label>
+      <label class="f">Увімкнути при, °C<input id="thOnAt" type="number" step="0.5" value="${t.onAt}"></label><label class="f">Вимкнути при, °C<input id="thOffAt" type="number" step="0.5" value="${t.offAt}"></label></div>
+    <div class="row"><button class="primary" onclick="saveThermo(this)">Зберегти</button><button class="danger" onclick="saveThermo(this,true)">Видалити</button><button class="ghost" onclick="go('auto')">Скасувати</button></div></div>`;
+}
+function thermoRedraw() { const k = $("thSensor").value; $("thIdx").innerHTML = comps(k).filter((c) => TEMP_TYPES.includes(c.t)).map((c) => `<option value="${c.i}">${esc(c.name)}</option>`).join(""); }
+async function saveThermo(btn, del) {
+  const id = $("thForm").dataset.id, list = (admin.thermostats || []).filter((x) => x.id !== id);
+  if (!del) {
+    const t = { id, name: $("thName").value || "Термостат", enabled: $("thOn").checked, sensorKey: $("thSensor").value, sensorIndex: Number($("thIdx").value || 0), targetKey: $("thTarget").value, mode: $("thMode").value, onAt: Number($("thOnAt").value), offAt: Number($("thOffAt").value) };
+    if (!t.sensorKey || !t.targetKey) return toast("Вибери датчик і що вмикати");
+    if (t.mode === "HEAT" ? t.offAt <= t.onAt : t.offAt >= t.onAt) return toast(t.mode === "HEAT" ? "Для обігріву «вимкнути при» має бути більше" : "Для охолодження «вимкнути при» має бути менше");
+    const old = (admin.thermostats || []).findIndex((x) => x.id === id); old >= 0 ? list.splice(old, 0, t) : list.push(t);
+  }
+  if (await act(btn, () => call("thermo_set", { thermostats: list }), del ? "Видалено" : "Збережено")) go("auto");
+}
+function schedForm(s) {
+  s = s || { id: uid(), deviceKey: "", hour: 7, minute: 0, days: 31, turnOn: true, enabled: true, comp: -1 };
+  return `<div class="sub" id="scForm" data-id="${esc(s.id)}"><div class="row"><label class="f">Пристрій<select id="scDev" onchange="schedRedraw()">${devOptions(s.deviceKey, (d) => d.kind === "tuya" || d.kind === "esp")}</select></label>
+    <label class="f" id="scCompBox">${schedCompSel(s.deviceKey, s.comp)}</label>
+    <label class="f">Час<input id="scTime" type="time" value="${hhmm(s.hour * 60 + s.minute)}"></label><label class="f">Дія<select id="scOn"><option value="1" ${s.turnOn ? "selected" : ""}>увімкнути</option><option value="0" ${!s.turnOn ? "selected" : ""}>вимкнути</option></select></label></div>
+    <div class="days">${DAYS.map((d, i) => `<label><input type="checkbox" class="scDay" data-b="${i}" ${s.days & (1 << i) ? "checked" : ""}>${d}</label>`).join("")}<span class="muted" style="align-self:center;margin-left:8px">жодного дня — один раз</span></div>
+    <label class="c"><input id="scEn" type="checkbox" ${s.enabled !== false ? "checked" : ""}> працює</label>
+    <div class="row"><button class="primary" onclick="saveSched(this)">Зберегти</button><button class="danger" onclick="saveSched(this,true)">Видалити</button><button class="ghost" onclick="go('auto')">Скасувати</button></div></div>`;
+}
+function schedCompSel(key, sel) { if ((dev(key) || {}).kind !== "esp") return ""; return `Вихід<select id="scComp"><option value="-1">перший вихід</option>${comps(key).filter((c) => OUT_TYPES.includes(c.t)).map((c) => `<option value="${c.i}" ${sel === c.i ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>`; }
+function schedRedraw() { $("scCompBox").innerHTML = schedCompSel($("scDev").value, -1); }
+async function saveSched(btn, del) {
+  const id = $("scForm").dataset.id, list = (admin.schedules || []).filter((x) => x.id !== id);
+  if (!del) {
+    const m = fromHHMM($("scTime").value); let days = 0; document.querySelectorAll(".scDay").forEach((c) => { if (c.checked) days |= 1 << Number(c.dataset.b); });
+    const s = { id, deviceKey: $("scDev").value, hour: Math.floor(m / 60), minute: m % 60, days, turnOn: $("scOn").value === "1", enabled: $("scEn").checked, comp: $("scComp") ? Number($("scComp").value) : -1 };
+    if (!s.deviceKey) return toast("Вибери пристрій");
+    list.push(s);
+  }
+  if (await act(btn, () => call("sched_set", { schedules: list }), del ? "Видалено" : "Збережено")) go("auto");
+}
+
+// ------------------------------------------------------------------ налаштування
+function settingsView() {
+  if (!admin) return `<div class="page"><div class="muted">Завантаження…</div></div>`;
+  const h = admin.hub || {}, inv = admin.inverter || {}, tc = admin.tuyaCloud || {};
+  const up = h.uptime != null ? (h.uptime > 86400 ? Math.floor(h.uptime / 86400) + " д " : "") + Math.floor(h.uptime % 86400 / 3600) + " год" : "—";
+  return `<div class="page stack">
+    <div class="card"><h3>Пристрої</h3><div class="list">${(admin.devices || []).map((d, i) => `<div class="item"><div class="t"><div>${esc(d.name)}</div><div class="s">${d.kind === "ESP" ? "плата ESP" : "розетка Tuya"}${d.ip ? " · " + esc(d.ip) : ""}</div></div><button class="small" onclick="moveDev(${i},-1)">↑</button><button class="small" onclick="moveDev(${i},1)">↓</button><button class="small" onclick="go('dev',{key:'${esc(d.key)}'})">Відкрити</button></div>`).join("") || `<div class="empty">Немає</div>`}</div></div>
+
+    <div class="card"><h3>Додати плату ESP</h3><div class="muted">Плата має бути в тій самій Wi-Fi-мережі, що й Pi (перше підключення до Wi-Fi — з телефона через точку доступу плати «IoT-…»).</div>
+      <div><button onclick="scanEsp(this)">Знайти в мережі</button></div>
+      ${scanList ? (scanList.length ? `<div class="list">${scanList.map((f) => `<div class="item"><div class="t"><div>${esc(f.name)}</div><div class="s">${esc(f.ip)}${f.fw ? " · прошивка " + esc(f.fw) : ""}${f.added ? " · вже додана" : ""}</div></div>${f.added ? "" : `<button class="small primary" onclick="$('espIp').value='${esc(f.ip)}';$('espName').value='${esc(f.name)}'">Вибрати</button>`}</div>`).join("")}</div>` : `<div class="empty">Плат не знайдено — введи IP вручну</div>`) : ""}
+      <div class="row"><label class="f">IP плати<input id="espIp" placeholder="192.168.0.50"></label><label class="f">Назва<input id="espName"></label><label class="f">Ключ (якщо плата вже прив'язана)<input id="espKey" placeholder="порожньо — нова плата"></label></div>
+      <div><button class="primary" onclick="addEsp(this)">Додати плату</button></div></div>
+
+    <div class="card"><h3>Додати розетку Tuya</h3><div class="muted">Local key розетки дає хмара Tuya: iot.tuya.com → Cloud → твій проєкт → Access ID і Access Secret (ті самі, що в додатку).</div>
+      <div class="row"><label class="f" style="max-width:150px">Регіон<select id="tcReg">${[["eu", "Європа"], ["eu-w", "Західна Європа"], ["us", "Америка (захід)"], ["us-e", "Америка (схід)"], ["cn", "Китай"], ["in", "Індія"], ["sg", "Сингапур"]].map(([v, l]) => `<option value="${v}" ${tc.region === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+        <label class="f">Access ID<input id="tcId" value="${esc(tc.accessId || "")}"></label><label class="f">Access Secret<input id="tcSecret" type="password" placeholder="${tc.hasSecret ? "збережено на Pi" : ""}"></label></div>
+      <div><button onclick="cloudListDo(this)">Показати мої пристрої з хмари</button></div>
+      ${cloudList ? `<div class="list">${cloudList.map((c) => `<label class="item"><input type="checkbox" class="cloudPick" value="${esc(c.id)}" ${c.added ? "disabled" : ""}><div class="t"><div>${esc(c.name)}</div><div class="s">${esc(c.product || c.category)}${c.added ? " · вже додано" : ""}</div></div></label>`).join("")}</div><div><button class="primary" onclick="cloudAdd(this)">Додати вибрані</button></div>` : ""}
+      <details><summary>Додати вручну (якщо знаєш ID і local key)</summary><div class="row" style="margin-top:8px"><label class="f">Назва<input id="mName"></label><label class="f">ID пристрою<input id="mId"></label><label class="f">Local key<input id="mKey"></label></div>
+        <div class="row"><label class="f">IP (необов'язково)<input id="mIp"></label><label class="f">Версія<select id="mVer"><option>3.3</option><option>3.4</option><option>3.5</option><option>3.1</option></select></label><button class="primary" onclick="addTuyaManual(this)">Додати</button></div></details></div>
+
+    <div class="card"><h3>Інвертор (SmartESS)</h3>${inv.user ? `<div class="muted">Акаунт: <b>${esc(inv.user)}</b> · інверторів: ${(inv.devices || []).length}</div>` : `<div class="muted">Не підключено</div>`}
+      <div class="row"><label class="f" style="max-width:200px">Сервер<select id="essSrv"><option value="DESS" ${inv.server !== "SHINE" ? "selected" : ""}>SmartESS / DessMonitor</option><option value="SHINE" ${inv.server === "SHINE" ? "selected" : ""}>ShineMonitor</option></select></label>
+        <label class="f">Логін<input id="essUser" value="${esc(inv.user || "")}"></label><label class="f">Пароль<input id="essPwd" type="password"></label></div>
+      <div class="row"><button class="primary" onclick="essLogin(this)">${inv.user ? "Увійти заново / знайти інвертори" : "Підключити"}</button>${inv.user ? `<button class="danger" onclick="essLogout(this)">Відключити</button>` : ""}</div>
+      <div class="muted">Пароль не зберігається — лише його хеш, як і в додатку.</div></div>
+
+    <div class="card"><h3>Raspberry Pi</h3>
+      <div class="muted">${esc(h.name || "")} · хаб ${esc(h.version || "")} · удома: <code>http://${esc(h.lan || "?")}:8380</code> · працює ${up} · процесор ${h.cpuTemp != null ? h.cpuTemp + " °C" : "—"} · MQTT для плат: ${h.mqtt == null ? "не налаштовано" : h.mqtt ? "працює" : "не підключено"}</div>
+      <div class="muted">Поза домом: ${h.relay ? `<code>${esc(h.relay)}</code>` : "не налаштовано"}</div>
+      <div class="row"><label class="f" style="max-width:200px">Новий PIN (6 цифр)<input id="newPin" inputmode="numeric" maxlength="6"></label><button onclick="act(this,()=>call('pin_set',{pin:$('newPin').value}),'PIN змінено')">Змінити PIN</button></div>
+      <div class="row"><label class="f" style="max-width:260px">Прошивки плат брати з<select id="chan" onchange="act(null,()=>call('channel_set',{channel:this.value}),'Збережено')"><option value="beta" ${h.channel !== "latest" ? "selected" : ""}>бета (нове першим)</option><option value="latest" ${h.channel === "latest" ? "selected" : ""}>стабільна</option></select></label></div>
+      <div class="muted">Сповіщення від правил показуються тут, у панелі.</div></div></div>`;
+}
+async function moveDev(i, dir) { const keys = admin.devices.map((d) => d.key), j = i + dir; if (j < 0 || j >= keys.length) return; [keys[i], keys[j]] = [keys[j], keys[i]]; if (await act(null, () => call("device_move", { keys }))) render(); }
+async function scanEsp(btn) { btn.textContent = "Шукаю…"; const r = await act(btn, () => call("esp_scan", {}, 20000)); scanList = r ? r.found : scanList; render(); }
+async function addEsp(btn) {
+  const r = await act(btn, () => call("esp_add", { ip: $("espIp").value.trim(), name: $("espName").value.trim(), apiKey: $("espKey").value.trim() }, 30000), "Плату додано");
+  if (r) { scanList = null; go("dev", { key: r.key }); }
+}
+async function cloudListDo(btn) { const r = await act(btn, () => call("tuya_cloud_list", { region: $("tcReg").value, accessId: $("tcId").value, secret: $("tcSecret").value }, 60000)); if (r) { cloudList = r.cloud; render(); } }
+async function cloudAdd(btn) {
+  const ids = [...document.querySelectorAll(".cloudPick:checked")].map((c) => c.value);
+  if (!ids.length) return toast("Вибери пристрої");
+  const r = await act(btn, () => call("tuya_cloud_add", { ids }, 30000), "Додано — Pi сама знайде розетки в мережі");
+  if (r) { cloudList = null; render(); }
+}
+async function addTuyaManual(btn) {
+  const device = { kind: "TUYA", name: $("mName").value, deviceId: $("mId").value.trim(), localKey: $("mKey").value.trim(), ip: $("mIp").value.trim(), version: $("mVer").value };
+  if (await act(btn, () => call("device_save", { device }), "Розетку додано")) render();
+}
+async function essLogin(btn) {
+  const r = await act(btn, () => call("inv_login", { server: $("essSrv").value, user: $("essUser").value, password: $("essPwd").value }, 60000));
+  if (r) { toast(`Знайдено інверторів: ${r.found}`); render(); }
+}
+async function essLogout(btn) { if (confirm("Відключити акаунт SmartESS від Pi?") && await act(btn, () => call("inv_logout"))) render(); }
+
+setInterval(() => { if (view.tab === "dev" && !view.key) realDevices().forEach((d) => renderCard(d.key)); }, 60000);
+setInterval(() => { if (ws && ws.readyState === 1 && view.tab === "set") loadAdmin(); }, 60000);
 $("app").style.display = "block";
+render();
 connect();
 </script>
 </body>

@@ -326,8 +326,10 @@ class ThermoEngine:
                 except Exception as e:
                     self.status[tid] = "Помилка: %s" % e
                 self.last[tid] = (want, now)
-            elif tid not in self.status:
-                self.status[tid] = "Працює" if target_on else "Очікує"
+            else:
+                acted = last and now - last[1] < 120
+                if not acted:
+                    self.status[tid] = "%.1f °C · %s" % (temp, "увімкнено" if target_on else "вимкнено" if target_on is False else "стан невідомий")
 
 
 class ScheduleEngine:
