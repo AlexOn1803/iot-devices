@@ -407,10 +407,11 @@ class RuleEngine(private val ctx: Context) {
             if (!ok) {
                 trueSince -= r.id
                 latched -= r.id
+                devSince -= r.id
                 setStatus(r.id, if (r.needsArm) "Активне, чекає умов" else "Чекає умов")
                 continue
             }
-            if (r.id in latched) { setStatus(r.id, "Спрацювало, чекає, поки умови зміняться"); continue }
+            if (r.id in latched) { keep(r, now); continue }
             val since = trueSince.getOrPut(r.id) { now }
             val left = r.holdSec * 1000L - (now - since)
             if (left > 0) { setStatus(r.id, "Умови виконуються, спрацює через ${(left + 999) / 1000} с"); continue }
@@ -422,10 +423,44 @@ class RuleEngine(private val ctx: Context) {
         }
     }
 
-    private suspend fun fire(r: Rule) {
+    private val devSince = HashMap<String, Long>()
+
+    /** Поточний стан виходу дії (null — невідомо). */
+    private fun isOn(a: Action): Boolean? {
+        val app = IotApp.instance
+        val d = app.storage.device(a.deviceKey) ?: return null
+        if (!d.isEsp) return app.controller.state(a.deviceKey).takeIf { it.online }?.on
+        val st = app.controller.espState(a.deviceKey)
+        if (!st.online) return null
+        val c = if (a.comp >= 0) st.comps.firstOrNull { it.i == a.comp }
+        else st.comps.firstOrNull { it.type == EspType.RELAY || it.type == EspType.PWM || it.type == EspType.WS2812 || it.type == EspType.TUYA }
+        return c?.on
+    }
+
+    /** Умови досі істинні: тримаємо стан, який задає правило (пристрій могли перемкнути вручну). */
+    private suspend fun keep(r: Rule, now: Long) {
+        val bad = r.actions.filter { (it.type == ActType.ON || it.type == ActType.OFF) && isOn(it)?.let { on -> on != (it.type == ActType.ON) } == true }
+        if (bad.isEmpty()) {
+            devSince -= r.id
+            setStatus(r.id, if (r.actions.any { it.type == ActType.ON || it.type == ActType.OFF })
+                "Спрацювало, тримає стан, поки умови виконуються" else "Спрацювало, чекає, поки умови зміняться")
+            return
+        }
+        val since = devSince.getOrPut(r.id) { now }
+        val wait = maxOf(r.holdSec * 1000L - (now - since), r.cooldownSec * 1000L - (now - (lastFired[r.id] ?: 0)))
+        if (wait > 0) {
+            setStatus(r.id, "${bad.joinToString { RuleValues.nameOf(it.deviceKey) }} перемкнули інакше — поверну через ${(wait + 999) / 1000} с")
+            return
+        }
+        fire(r, bad)
+        lastFired[r.id] = now
+        devSince -= r.id
+    }
+
+    private suspend fun fire(r: Rule, only: List<Action>? = null) {
         val app = IotApp.instance
         val errors = mutableListOf<String>()
-        for (a in r.actions) {
+        for (a in only ?: r.actions) {
             try {
                 when (a.type) {
                     ActType.ON, ActType.OFF, ActType.TOGGLE -> {
@@ -453,8 +488,12 @@ class RuleEngine(private val ctx: Context) {
                 errors += "${a.type.label} ${RuleValues.nameOf(a.deviceKey)}: ${e.message}"
             }
         }
-        if (r.needsArm && r.disarmAfter) setArmed(r.id, false)
         val t = android.text.format.DateFormat.format("HH:mm:ss", System.currentTimeMillis())
+        if (only != null) {
+            setStatus(r.id, if (errors.isEmpty()) "Повернуло стан о $t" else "Повернуло стан о $t з помилками: ${errors.joinToString("; ")}", fired = true)
+            return
+        }
+        if (r.needsArm && r.disarmAfter) setArmed(r.id, false)
         setStatus(r.id, if (errors.isEmpty()) "Спрацювало о $t" else "Спрацювало о $t з помилками: ${errors.joinToString("; ")}", fired = true)
         if (errors.isNotEmpty()) Notifications.alert(ctx, r.name, "Не всі дії виконано: ${errors.joinToString("; ")}")
     }

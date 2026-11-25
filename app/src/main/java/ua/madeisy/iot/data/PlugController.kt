@@ -110,6 +110,8 @@ class PlugController(
         scope.launch { hub.connectedEvents.collect { lastSync = null; syncHub() } }
         scope.launch { storage.devices.collect { syncHub() } }
         scope.launch { storage.espLinks.collect { syncHub() } }
+        scope.launch { storage.thermostats.collect { syncHub() } }
+        scope.launch { storage.schedules.collect { syncHub() } }
         scope.launch {
             // хаб з'явився/зник — перезапускаємо цикли: або віддаємо пристрої хабу, або беремо назад
             hub.status.map { it.connected }.distinctUntilChanged().collect { connected ->
@@ -138,7 +140,10 @@ class PlugController(
                     .put("dps", d.dps.toJson()))
             }
         }
+        // термостати й розклади з телефона теж виконує Pi (цілодобово, без телефона)
         val msg = JSONObject().put("t", "sync").put("devices", devs)
+            .put("thermostats", JSONArray().apply { storage.thermostats.value.forEach { put(it.toJson()) } })
+            .put("schedules", JSONArray().apply { storage.schedules.value.forEach { put(it.toJson()) } })
         runCatching { IotApp.instance.inverters.hubConfig() }.getOrNull()?.let { msg.put("inverter", it) }
         val sig = msg.toString()
         if (sig == lastSync) return

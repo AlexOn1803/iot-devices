@@ -234,7 +234,9 @@ fun RuleEditScreen(id: String, nav: Nav) {
                 Text("Захист від випадкових стрибків: спрацює, лише якщо умови виконуються стільки секунд поспіль.",
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 NumberField("Пауза між спрацюваннями, с", r.cooldownSec) { r = r.copy(cooldownSec = it) }
-                Text("Повторно спрацює, лише коли умови спершу стануть хибними, а потім знову виконаються.",
+                Text("Поки умови виконуються, правило тримає стан «увімкнути/вимкнути»: якщо пристрій перемкнули вручну, " +
+                    "через «триматися» секунд (і не раніше цієї паузи після попереднього спрацювання) поверне як треба. " +
+                    "Сповіщення й активації — один раз, доки умови не стануть хибними.",
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 HorizontalDivider(Modifier.padding(vertical = 6.dp))
                 TimeWindow(r) { r = it }

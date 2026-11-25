@@ -98,6 +98,8 @@ class ThermostatEngine(
     }
 
     private suspend fun tick() {
+        // з Raspberry Pi термостати виконує вона
+        if (runCatching { ua.madeisy.iot.IotApp.instance.controller.hubMode() }.getOrDefault(false)) return
         val list = storage.thermostats.value.filter { it.enabled && it.valid }
         // утримання з'єднань з потрібними пристроями
         val need = list.flatMap { listOf(it.sensorKey, it.targetKey) }.toSet()

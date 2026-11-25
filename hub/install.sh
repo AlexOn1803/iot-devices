@@ -18,12 +18,12 @@ say() { printf '\n\033[1;32m==> %s\033[0m\n' "$*"; }
 
 say "Пакети системи"
 apt-get update -qq
-APT python3-venv python3-pip avahi-daemon curl jq mosquitto mosquitto-clients
+APT python3-venv python3-pip avahi-daemon avahi-utils curl jq mosquitto mosquitto-clients
 
 say "Файли хаба"
 id iothub >/dev/null 2>&1 || useradd --system --home "$DIR" --shell /usr/sbin/nologin iothub
 mkdir -p "$DIR/relay" "$DIR/web" /etc/iot-hub
-for f in iothub.py rules.py mqttbridge.py web/index.html; do curl -fsSL "$RAW/hub/$f" -o "$DIR/$f"; done
+for f in iothub.py rules.py mqttbridge.py admin.py web/index.html; do curl -fsSL "$RAW/hub/$f" -o "$DIR/$f"; done
 curl -fsSL "$RAW/relay/src/index.js" -o "$DIR/relay/index.js"
 [ -d "$DIR/venv" ] || python3 -m venv "$DIR/venv"
 "$DIR/venv/bin/pip" install -q --upgrade pip

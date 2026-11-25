@@ -487,10 +487,21 @@ class Hub:
             import random
             self.cfg.data["pin"] = "%06d" % random.SystemRandom().randint(0, 999999)
             self.cfg.save()
-        from rules import RuleEngine
+        from rules import RuleEngine, ThermoEngine, ScheduleEngine
+        from admin import Admin
         self.rules = RuleEngine(self)
+        self.thermo = ThermoEngine(self)
+        self.sched = ScheduleEngine(self)
+        self.admin = Admin(self)
+        self.InverterWorker = InverterWorker
+        self.version = VERSION
+        self.started = time.time()
         self.mqtt = None
         self.apply_devices()
+
+    @staticmethod
+    def lan():
+        return lan_ip()
 
     # ---- пристрої
     def apply_devices(self):
@@ -546,6 +557,11 @@ class Hub:
                 "current": 0.0 if on is False else cur, "voltage": num(("voltage", 20), ("voltageScale", 1))}
 
     def value(self, key, metric):
+        if key == "hub":   # сама Raspberry Pi
+            if metric == "temp":
+                from admin import cpu_temp
+                return cpu_temp()
+            return True if metric == "online" else None
         st = self.states.get(key)
         if not st:
             return None
@@ -582,6 +598,21 @@ class Hub:
         v = comp.get(field)
         return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
 
+    def is_on(self, key, comp=-1):
+        """Чи увімкнено пристрій (для плати — компонент comp, -1 — перший вихід); None — невідомо."""
+        st = self.states.get(key) or {}
+        if not st.get("online"):
+            return None
+        if key in self.tuya:
+            return self.tuya_values(key).get("on")
+        comps = (st.get("state") or {}).get("comps") or []
+        if comp is None or comp < 0:
+            c = next((c for c in comps if c.get("t") in ("relay", "pwm", "ws2812", "tuya")), None)
+        else:
+            c = next((c for c in comps if c.get("i") == comp), None)
+        v = (c or {}).get("on")
+        return v if isinstance(v, bool) else None
+
     async def switch(self, key, on, comp=-1):
         """on=True/False, None — перемкнути. Для плати — компонент comp (-1 — перший вихід)."""
         if key in self.tuya:
@@ -608,6 +639,7 @@ class Hub:
                for d in self.cfg.data.get("devices", [])]
         for d in (self.cfg.data.get("inverter") or {}).get("devices", []):
             out.insert(0, {"key": "inv:" + d["sn"], "name": d.get("alias") or "Інвертор", "kind": "inv"})
+        out.append({"key": "hub", "name": "Raspberry Pi", "kind": "hub"})
         return out
 
     def remember_ip(self, key, ip, version):
@@ -656,6 +688,8 @@ class Hub:
     # ---- повідомлення від додатку
     async def handle(self, msg: dict, reply):
         t = msg.get("t")
+        if await self.admin.handle(t, msg, reply):
+            return
         if t == "get":
             await reply(self.hello())
             await reply(self.snapshot())
@@ -682,10 +716,24 @@ class Hub:
             except Exception as e:
                 await reply({"t": "ack", "id": msg.get("id"), "ok": False, "error": str(e)})
         elif t == "sync":
+            # хаб — головний: пристрої з додатка додаються/оновлюються, але не видаляються
+            # (видалення — окремою командою device_remove); так новий телефон без пристроїв нічого не зітре
             if isinstance(msg.get("devices"), list):
-                self.cfg.data["devices"] = msg["devices"]
-            if "inverter" in msg:
+                devs = self.cfg.data.setdefault("devices", [])
+                for d in msg["devices"]:
+                    if not isinstance(d, dict) or not d.get("key"):
+                        continue
+                    i = next((i for i, x in enumerate(devs) if x.get("key") == d["key"]), None)
+                    if i is None:
+                        devs.append(d)
+                    else:
+                        devs[i] = dict(devs[i], **d)
+            if msg.get("inverter"):
                 self.cfg.data["inverter"] = msg["inverter"]
+            if isinstance(msg.get("thermostats"), list):
+                self.cfg.data["thermostats"] = msg["thermostats"]
+            if isinstance(msg.get("schedules"), list):
+                self.cfg.data["schedules"] = msg["schedules"]
             if isinstance(msg.get("rules"), list):
                 self.rules.set_rules(msg["rules"])
             self.cfg.save()
@@ -706,6 +754,15 @@ class Hub:
                 await reply({"t": "ack", "id": msg.get("id"), "ok": True})
             except Exception as e:
                 await reply({"t": "ack", "id": msg.get("id"), "ok": False, "error": str(e)})
+
+    async def send_panel_auth(self):
+        """Для веб-панелі поза домом: ретранслятор перевіряє PIN за хешем."""
+        ws = self.relay_ws
+        if ws is None or ws.closed:
+            return
+        await ws.send_str(json.dumps({"t": "panel_auth",
+                                      "pin": hashlib.sha256(("pin:" + str(self.cfg.data.get("pin", ""))).encode()).hexdigest(),
+                                      "session": self.web_session()}))
 
     # ---- локальний сервер
     def web_session(self):
@@ -801,10 +858,7 @@ class Hub:
                         log.info("relay connected")
                         self.relay_ws = ws
                         delay = 2
-                        # для веб-панелі поза домом: ретранслятор перевіряє PIN за хешем
-                        await ws.send_str(json.dumps({"t": "panel_auth",
-                                                      "pin": hashlib.sha256(("pin:" + str(self.cfg.data.get("pin", ""))).encode()).hexdigest(),
-                                                      "session": self.web_session()}))
+                        await self.send_panel_auth()
                         try:
                             with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "index.html"), encoding="utf-8") as f:
                                 await ws.send_str(json.dumps({"t": "panel_html", "html": f.read()}))
@@ -855,6 +909,8 @@ def main():
         pass
     loop.create_task(hub.relay_loop())
     loop.create_task(hub.rules.run())
+    loop.create_task(hub.thermo.run())
+    loop.create_task(hub.sched.run())
     if cfg.data.get("mqtt"):
         from mqttbridge import MqttBridge
         hub.mqtt = MqttBridge(hub, cfg.data["mqtt"])

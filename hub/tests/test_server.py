@@ -87,7 +87,7 @@ async def main():
                      "ip": "127.0.0.1:17701", "version": "3.3", "dps": {"switch": 1}},
                     {"key": "esp", "kind": "ESP", "name": "Плата", "deviceId": "abc123", "ip": "127.0.0.1:17710", "apiKey": "espkey"},
                 ]}))
-                h = await until(lambda j: j["t"] == "hello" and len(j.get("devices", [])) == 2)
+                h = await until(lambda j: j["t"] == "hello" and len([x for x in j.get("devices", []) if x["kind"] != "hub"]) == 2)
                 check("hello з переліком пристроїв", h and h["devices"][0]["name"] in ("Бойлер", "Плата"))
                 # плата публікує стан через брокер — хаб має прийняти його без опитування
                 await asyncio.sleep(1)
@@ -122,6 +122,15 @@ async def main():
                 rs = await until(lambda j: j["t"] == "rule_status" and "Спрацювало" in j["status"]["text"], 5) \
                     or next((m for m in msgs if m["t"] == "rule_status" and "Спрацювало" in m["status"]["text"]), None)
                 check("статус правила «Спрацювало»", rs)
+
+                # умови досі істинні, а розетку вимкнули вручну — правило має повернути її
+                await asyncio.sleep(1)
+                await ws.send_str(json.dumps({"t": "switch", "id": 9, "key": "plug", "on": False}))
+                j = await until(lambda j: j["t"] == "state" and j["key"] == "plug" and j["state"].get("vals", {}).get("on") is False, 6)
+                check("розетку вимкнули вручну", j)
+                t0 = time.time()
+                j = await until(lambda j: j["t"] == "state" and j["key"] == "plug" and j["state"].get("vals", {}).get("on") is True, 12)
+                check(f"правило повернуло розетку за {time.time()-t0:.1f} с (тримає стан)", j)
         saved = json.load(open(d + "/config.json"))
         check("правила й пристрої збережено на диску", saved.get("rules") and len(saved.get("devices", [])) == 2)
     finally:

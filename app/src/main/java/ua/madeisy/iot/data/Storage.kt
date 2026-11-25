@@ -128,6 +128,10 @@ class Storage(context: Context) {
 
     @Synchronized
     fun removeDevice(key: String) {
+        // хаб не видаляє пристрої під час синхронізації — кажемо йому окремо
+        runCatching {
+            ua.madeisy.iot.IotApp.instance.controller.hub.send(org.json.JSONObject().put("t", "device_remove").put("key", key))
+        }
         saveDevices(_devices.value.filterNot { it.key == key })
         saveSchedules(_schedules.value.filterNot { it.deviceKey == key })
         saveThermostats(_thermostats.value.filterNot { it.sensorKey == key || it.targetKey == key })
