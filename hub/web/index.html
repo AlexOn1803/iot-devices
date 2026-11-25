@@ -280,7 +280,7 @@ function gridView() {
   if (!list.length) return top + `<div class="page"><div class="card"><b>Пристроїв ще немає</b><div class="muted">Додай їх у «Налаштування» → «Пристрої»: плати ESP шукаються в мережі, розетки Tuya — з хмари Tuya або вручну, інвертор — через акаунт SmartESS.</div><div><button class="primary" onclick="go('set')">Додати пристрій</button></div></div></div>`;
   return top + `<main class="grid">${list.map((d) => `<div class="card" id="c_${esc(d.key)}"></div>`).join("")}</main>`;
 }
-function toggleEdit() { editing = !editing; if (!editing) send({ t: "dash_set", dash }); render(); }
+function toggleEdit() { editing = !editing; tilePick = null; if (!editing) send({ t: "dash_set", dash }); render(); }
 function moveTile(key, dir) { const keys = ordered().map((d) => d.key); const i = keys.indexOf(key), j = i + dir; if (j < 0 || j >= keys.length) return; [keys[i], keys[j]] = [keys[j], keys[i]]; dash.order = keys; render(); }
 function hideTile(key) { const h = new Set(dash.hidden || []); h.has(key) ? h.delete(key) : h.add(key); dash.hidden = [...h]; render(); }
 function toggleBtn(key, on, comp) { return `<div class="toggle ${on ? "on" : ""} ${busy.has(key) ? "busy" : ""}" data-key="${esc(key)}" data-comp="${comp ?? -1}" data-on="${on ? 1 : 0}"></div>`; }
@@ -290,9 +290,43 @@ document.addEventListener("click", (e) => {
   send({ t: "switch", key: t.dataset.key, on: t.dataset.on !== "1", comp: Number(t.dataset.comp) });
   setTimeout(() => { if (busy.delete(t.dataset.key)) refreshLive(t.dataset.key); }, 5000);
 });
+// свій набір показників на плитці (зберігається на Pi в dash.tiles)
+let tilePick = null;
+const tileMetrics = (key) => ((dash.tiles || {})[key] || []).filter((m) => metricsOf(key).some((x) => x[0] === m));
+function customBody(key, list) {
+  const ms = metricsOf(key);
+  let isOn = false, toggles = "";
+  const stats = list.map((id) => {
+    const m = ms.find((x) => x[0] === id), v = valueOf(key, id);
+    const out = id.match(/^c(\d+):on$/);
+    if (out) { if (v) isOn = true; if (!editing) toggles += `<div class="comp"><span class="label">${esc(m[1].replace(/: увімкнено$/, ""))}</span>${toggleBtn(key, v, Number(out[1]))}</div>`; return ""; }
+    if (id === "on" && v) isOn = true;
+    const txt = v == null ? "—" : m[2] === "Вт" && typeof v === "number" ? fmtW(v) : typeof v === "boolean" ? (v ? "так" : "ні") : fmt(v, m[2], m[2] === "А" ? 2 : 1);
+    return `<div class="stat"><b>${esc(txt)}</b><span>${esc(m[1])}</span></div>`;
+  }).join("");
+  return { body: (stats ? `<div class="row">${stats}</div>` : "") + toggles, isOn };
+}
+function pickerHtml(key) {
+  const ms = metricsOf(key), sel = tileMetrics(key);
+  const rows = sel.map((id, i) => { const m = ms.find((x) => x[0] === id); return `<div class="comp"><span class="label">${esc(m[1])}${m[2] ? ", " + esc(m[2]) : ""}</span><button class="small" onclick="pickMove('${esc(key)}',${i},-1)">↑</button><button class="small" onclick="pickMove('${esc(key)}',${i},1)">↓</button><button class="small danger" onclick="pickToggle('${esc(key)}','${esc(id)}')">✕</button></div>`; }).join("");
+  const rest = ms.filter((x) => !sel.includes(x[0])).map((x) => `<option value="${esc(x[0])}">${esc(x[1])}${x[2] ? ", " + esc(x[2]) : ""}</option>`).join("");
+  return `<div class="sub"><b>Що показувати на плитці</b>${rows || `<div class="muted">Зараз — як за замовчуванням</div>`}
+    <div class="row"><select id="pickAdd" style="flex:1;min-width:0">${rest}</select><button class="small" onclick="pickToggle('${esc(key)}',$('pickAdd').value)">Додати</button></div>
+    <div class="row"><button class="small" onclick="pickReset('${esc(key)}')">Як за замовчуванням</button><button class="small primary" onclick="tilePick=null;send({t:'dash_set',dash});render()">Готово</button></div></div>`;
+}
+function pickToggle(key, id) { if (!id) return; dash.tiles = dash.tiles || {}; const l = tileMetrics(key); const i = l.indexOf(id); i >= 0 ? l.splice(i, 1) : l.push(id); dash.tiles[key] = l; renderCard(key); }
+function pickMove(key, i, dir) { const l = tileMetrics(key), j = i + dir; if (j < 0 || j >= l.length) return; [l[i], l[j]] = [l[j], l[i]]; dash.tiles[key] = l; renderCard(key); }
+function pickReset(key) { if (dash.tiles) delete dash.tiles[key]; renderCard(key); }
+
 function tileBody(key) {
   const d = dev(key) || {}, st = states[key], online = st && st.online;
   let body = "", isOn = false, head = "";
+  const custom = tileMetrics(key);
+  if (custom.length && !(view.tab === "dev" && view.key === key)) {
+    const c = customBody(key, custom);
+    if (d.kind === "tuya" && !editing) head = toggleBtn(key, tuyaVals(st).on);
+    return { body: c.body, isOn: online && (c.isOn || (d.kind === "tuya" && tuyaVals(st).on)), head };
+  }
   if (d.kind === "tuya") {
     const v = tuyaVals(st); isOn = online && v.on; head = editing ? "" : toggleBtn(key, v.on);
     body = `<div class="big">${online ? (v.on ? fmtW(v.power) : "Вимкнено") : "—"}</div><div class="row"><div class="stat"><b>${fmt(v.voltage, "В")}</b><span>напруга</span></div><div class="stat"><b>${fmt(v.current, "А", 2)}</b><span>струм</span></div></div>`;
@@ -331,7 +365,8 @@ function renderCard(key) {
   const { body, isOn, head } = tileBody(key);
   let html = `<div class="head"><div class="name" onclick="go('dev',{key:'${esc(key)}'})">${esc(d.name)} ›</div>`;
   if (editing) html += `<button class="small" onclick="moveTile('${esc(key)}',-1)">↑</button><button class="small" onclick="moveTile('${esc(key)}',1)">↓</button><button class="small" onclick="hideTile('${esc(key)}')">${hidden ? "Показати" : "Сховати"}</button>`;
-  c.innerHTML = html + head + `</div>` + body + statusLine(key);
+  const pick = editing ? (tilePick === key ? pickerHtml(key) : `<div><button class="small" onclick="tilePick='${esc(key)}';renderCard('${esc(key)}')">Що показувати</button></div>`) : "";
+  c.innerHTML = html + head + `</div>` + body + pick + statusLine(key);
   c.classList.toggle("on", !!isOn); c.style.opacity = editing && hidden ? 0.45 : 1;
 }
 
