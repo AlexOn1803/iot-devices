@@ -22,12 +22,13 @@ APT python3-venv python3-pip avahi-daemon avahi-utils curl jq mosquitto mosquitt
 
 say "Файли хаба"
 id iothub >/dev/null 2>&1 || useradd --system --home "$DIR" --shell /usr/sbin/nologin iothub
+usermod -aG dialout iothub
 mkdir -p "$DIR/relay" "$DIR/web" /etc/iot-hub
 for f in iothub.py rules.py mqttbridge.py admin.py web/index.html; do curl -fsSL "$RAW/hub/$f" -o "$DIR/$f"; done
 curl -fsSL "$RAW/relay/src/index.js" -o "$DIR/relay/index.js"
 [ -d "$DIR/venv" ] || python3 -m venv "$DIR/venv"
 "$DIR/venv/bin/pip" install -q --upgrade pip
-"$DIR/venv/bin/pip" install -q --upgrade aiohttp tinytuya paho-mqtt
+"$DIR/venv/bin/pip" install -q --upgrade aiohttp tinytuya paho-mqtt "esptool>=4.7,<5"
 chown -R iothub:iothub "$DIR" /etc/iot-hub
 chmod 700 /etc/iot-hub
 
@@ -40,6 +41,8 @@ Wants=network-online.target
 
 [Service]
 User=iothub
+# доступ до USB-портів — прошивати плати ESP, під'єднані до Pi
+SupplementaryGroups=dialout
 Environment=IOTHUB_CONFIG=$CONF
 ExecStart=$DIR/venv/bin/python $DIR/iothub.py
 Restart=always

@@ -146,6 +146,7 @@ function connect() {
       else if (!m.ok) toast(m.error || "Помилка");
     }
     else if (m.t === "notify") toast(`${m.title}: ${m.text}`);
+    else if (m.t === "flash") flashProgress(m.text, m.pct);
     else if (m.t === "hub") {   // поза домом, через ретранслятор: чи на зв'язку сама Pi
       setConn(m.online, m.online ? null : "Raspberry Pi не на зв'язку");
       if (m.online) ws.send(JSON.stringify({ t: "get" }));
@@ -710,6 +711,16 @@ function settingsView() {
       <div class="row"><label class="f">IP плати<input id="espIp" placeholder="192.168.0.50"></label><label class="f">Назва<input id="espName"></label><label class="f">Ключ (якщо плата вже прив'язана)<input id="espKey" placeholder="порожньо — нова плата"></label></div>
       <div><button class="primary" onclick="addEsp(this)">Додати плату</button></div></div>
 
+    <div class="card"><h3>Прошити плату ESP через USB</h3>
+      <div class="muted">Нова плата або плата з іншою прошивкою (наприклад, твій скетч). Після прошивки плата підніме точку доступу «IoT-…» — підключись до неї з телефона й вибери Wi-Fi, потім «Знайти в мережі» вище.</div>
+      <label class="c"><input type="checkbox" id="flErase" checked> стерти все на платі (рекомендовано, якщо там була інша прошивка)</label>
+      <div class="sub"><b>Плата вставлена в USB Raspberry Pi</b>
+        <div class="row"><button onclick="usbPorts(this)">Знайти порти</button>${usbPortList ? (usbPortList.length ? `<select id="flPort">${usbPortList.map((p) => `<option value="${esc(p.port)}">${esc(p.port)}${p.desc ? " — " + esc(p.desc) : ""}</option>`).join("")}</select><button class="primary" onclick="usbFlash(this)">Прошити</button>` : `<span class="muted">Плату не знайдено — встав її в USB Pi і натисни ще раз</span>`) : ""}</div></div>
+      <div class="sub"><b>Плата вставлена в USB цього комп'ютера</b>
+        <div class="muted">Chrome або Edge на комп'ютері. ${window.isSecureContext && "serial" in navigator ? "" : `<span class="status bad">Тут недоступно: браузер дозволяє USB лише на захищеній адресі — відкрий панель через <code>${esc((admin.hub || {}).relay || "https://iot-hub….workers.dev")}</code> або на самій Pi.</span>`}</div>
+        <div><button class="primary" onclick="webFlash(this)" ${window.isSecureContext && "serial" in navigator ? "" : "disabled"}>Вибрати порт і прошити</button></div></div>
+      <div id="flProg" class="muted"></div></div>
+
     <div class="card"><h3>Додати розетку Tuya</h3><div class="muted">Local key розетки дає хмара Tuya: iot.tuya.com → Cloud → твій проєкт → Access ID і Access Secret (ті самі, що в додатку).</div>
       <div class="row"><label class="f" style="max-width:150px">Регіон<select id="tcReg">${[["eu", "Європа"], ["eu-w", "Західна Європа"], ["us", "Америка (захід)"], ["us-e", "Америка (схід)"], ["cn", "Китай"], ["in", "Індія"], ["sg", "Сингапур"]].map(([v, l]) => `<option value="${v}" ${tc.region === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
         <label class="f">Access ID<input id="tcId" value="${esc(tc.accessId || "")}"></label><label class="f">Access Secret<input id="tcSecret" type="password" placeholder="${tc.hasSecret ? "збережено на Pi" : ""}"></label></div>
@@ -731,6 +742,60 @@ function settingsView() {
       <div class="row"><label class="f" style="max-width:260px">Прошивки плат брати з<select id="chan" onchange="act(null,()=>call('channel_set',{channel:this.value}),'Збережено')"><option value="beta" ${h.channel !== "latest" ? "selected" : ""}>бета (нове першим)</option><option value="latest" ${h.channel === "latest" ? "selected" : ""}>стабільна</option></select></label></div>
       <div class="muted">Сповіщення від правил показуються тут, у панелі.</div></div></div>`;
 }
+// ---------------- прошивка через USB
+let usbPortList = null;
+function flashProgress(text, pct) {
+  const el = $("flProg"); if (!el) return toast(text);
+  el.innerHTML = esc(text) + (pct != null ? `<div style="height:8px;background:var(--card2);border-radius:4px;margin-top:6px"><div style="height:8px;width:${pct}%;background:var(--accent);border-radius:4px"></div></div>` : "");
+}
+async function usbPorts(btn) { const r = await act(btn, () => call("usb_ports")); if (r) { usbPortList = r.ports; render(); } }
+async function usbFlash(btn) {
+  const port = $("flPort").value, erase = $("flErase").checked;
+  if (!confirm(`Прошити плату на ${port}?${erase ? " Усе на ній буде стерто." : ""}`)) return;
+  const r = await act(btn, () => call("usb_flash", { port, erase }, 600000));
+  if (r) flashProgress(`Готово: прошивка для ${r.board} записана. Плата піднімає точку доступу «IoT-…» для налаштування Wi-Fi.`, 100);
+}
+const CHIP_BOARD = { "ESP32-C3": "esp32c3", "ESP32-S3": "esp32s3", "ESP32-S2": "esp32s2", "ESP32": "esp32", "ESP8266": "esp8266" };
+async function fetchFw(board) {
+  let off = 0, size = 1, parts = [];
+  while (off < size) {
+    const r = await call("fw_get", { board, off }, 120000);
+    size = r.size; const bin = atob(r.data); parts.push(bin); off += bin.length;
+    flashProgress(`Завантажую прошивку з Pi… ${Math.round(off / size * 100)}%`, Math.round(off / size * 20));
+    if (!bin.length) break;
+  }
+  return parts.join("");
+}
+async function webFlash(btn) {
+  const erase = $("flErase").checked;
+  let transport;
+  btn.disabled = true;
+  try {
+    const { ESPLoader, Transport } = await import("https://unpkg.com/esptool-js@0.5.4/bundle.js");
+    const port = await navigator.serial.requestPort();
+    transport = new Transport(port, true);
+    const loader = new ESPLoader({ transport, baudrate: 460800, romBaudrate: 115200, terminal: { clean() {}, writeLine() {}, write() {} } });
+    flashProgress("Підключаюсь до плати… (якщо довго — затисни BOOT і натисни RESET)");
+    await loader.main();
+    const chip = loader.chip.CHIP_NAME;
+    let board = CHIP_BOARD[chip];
+    if (!board) throw new Error("Непідтримувана плата: " + chip);
+    if (board === "esp8266" && (await loader.getFlashSize()) <= 1024) board = "esp01";
+    if (!confirm(`Знайдено ${chip}. Прошити?${erase ? " Усе на платі буде стерто." : ""}`)) return;
+    const bin = await fetchFw(board);
+    flashProgress(erase ? "Стираю плату…" : "Прошиваю…", 20);
+    await loader.writeFlash({ fileArray: [{ data: bin, address: 0 }], flashSize: "keep", flashMode: "keep", flashFreq: "keep", eraseAll: erase, compress: true,
+      reportProgress: (i, w, t) => flashProgress(`Прошиваю… ${Math.round(w / t * 100)}%`, 20 + Math.round(w / t * 80)) });
+    await loader.after("hard_reset");
+    flashProgress(`Готово: прошивка для ${board} записана. Плата піднімає точку доступу «IoT-…» для налаштування Wi-Fi.`, 100);
+  } catch (e) {
+    if (e && e.name !== "NotFoundError") flashProgress("Помилка: " + (e.message || e));
+  } finally {
+    btn.disabled = false;
+    try { if (transport) await transport.disconnect(); } catch (e) { /* ок */ }
+  }
+}
+
 async function moveDev(i, dir) { const keys = admin.devices.map((d) => d.key), j = i + dir; if (j < 0 || j >= keys.length) return; [keys[i], keys[j]] = [keys[j], keys[i]]; if (await act(null, () => call("device_move", { keys }))) render(); }
 async function scanEsp(btn) { btn.textContent = "Шукаю…"; const r = await act(btn, () => call("esp_scan", {}, 20000)); scanList = r ? r.found : scanList; render(); }
 async function addEsp(btn) {

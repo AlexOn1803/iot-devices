@@ -451,3 +451,120 @@ class Admin:
         self.data["schedules"] = lst
         self.hub.cfg.save()
         return {"admin": self.snapshot()}
+
+    # ------------------------------------------------------------ прошивка через USB
+    FW_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fw")
+    CHIP_BOARD = {"ESP32-C3": "esp32c3", "ESP32-S3": "esp32s3", "ESP32-S2": "esp32s2", "ESP32": "esp32", "ESP8266": "esp8266"}
+
+    async def fw_file(self, board):
+        """Повна прошивка (з завантажувачем) з GitHub, кешується на Pi на годину."""
+        if board not in ("esp32c3", "esp32", "esp32s3", "esp32s2", "esp8266", "esp01"):
+            raise ValueError("Невідома плата: %s" % board)
+        ch = self.data.get("channel", "beta")
+        os.makedirs(self.FW_DIR, exist_ok=True)
+        path = os.path.join(self.FW_DIR, "%s-%s-full.bin" % (ch, board))
+        if os.path.exists(path) and time.time() - os.path.getmtime(path) < 3600:
+            return path
+        url = "https://github.com/%s/releases/download/%s/iot-%s-full.bin" % (REPO, ch, board)
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=120)) as s:
+            async with s.get(url) as r:
+                if r.status >= 300:
+                    raise IOError("Не вдалося завантажити прошивку (%d)" % r.status)
+                blob = await r.read()
+        if len(blob) < 100000 or blob[0] != 0xE9:
+            raise IOError("Завантажено не прошивку")
+        with open(path + ".tmp", "wb") as f:
+            f.write(blob)
+        os.replace(path + ".tmp", path)
+        return path
+
+    async def on_fw_get(self, msg):
+        """Шматок прошивки для браузерної прошивки (Web Serial) — працює й через ретранслятор."""
+        import base64
+        path = await self.fw_file(msg.get("board", ""))
+        off, n = int(msg.get("off", 0)), 192 * 1024
+        with open(path, "rb") as f:
+            f.seek(off)
+            chunk = f.read(n)
+        return {"size": os.path.getsize(path), "off": off, "data": base64.b64encode(chunk).decode()}
+
+    async def on_usb_ports(self, msg):
+        try:
+            from serial.tools import list_ports
+            ports = [{"port": p.device, "desc": p.description or "", "vid": p.vid} for p in list_ports.comports()
+                     if "ttyUSB" in p.device or "ttyACM" in p.device]
+        except ImportError:
+            import glob
+            ports = [{"port": p, "desc": ""} for p in sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))]
+        return {"ports": ports}
+
+    async def _esptool(self, args, progress=None, timeout=300):
+        import sys
+        p = await asyncio.create_subprocess_exec(sys.executable, "-m", "esptool", *args,
+                                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, buf = [], b""
+        async def read():
+            nonlocal buf
+            while True:
+                ch = await p.stdout.read(256)
+                if not ch:
+                    break
+                buf += ch
+                parts = re.split(rb"[\r\n]", buf)
+                buf = parts.pop()
+                for line in parts:
+                    t = line.decode(errors="replace").strip()
+                    if not t:
+                        continue
+                    out.append(t)
+                    if progress:
+                        progress(t)
+        try:
+            await asyncio.wait_for(asyncio.gather(read(), p.wait()), timeout)
+        except asyncio.TimeoutError:
+            p.kill()
+            raise IOError("esptool не відповідає")
+        if buf:
+            out.append(buf.decode(errors="replace").strip())
+        if p.returncode != 0:
+            tail = [l for l in out if l][-3:]
+            raise IOError("Не вдалося: " + " / ".join(tail))
+        return "\n".join(out)
+
+    async def on_usb_flash(self, msg):
+        """Прошити плату, під'єднану до USB Raspberry Pi."""
+        port = msg.get("port") or ""
+        if not re.fullmatch(r"/dev/tty(USB|ACM)\d+", port):
+            raise ValueError("Вибери порт плати")
+        if getattr(self, "_flashing", False):
+            raise IOError("Прошивка вже йде")
+        self._flashing = True
+        try:
+            def say(text, pct=None):
+                self.hub.broadcast({"t": "flash", "text": text, "pct": pct})
+            say("Визначаю плату…")
+            info = await self._esptool(["--port", port, "flash_id"], timeout=60)
+            m = re.search(r"Chip is (ESP32-C3|ESP32-S3|ESP32-S2|ESP32|ESP8266)", info) or \
+                re.search(r"Detecting chip type[.\s]*(ESP32-C3|ESP32-S3|ESP32-S2|ESP32|ESP8266)", info)
+            if not m:
+                raise IOError("Не вдалося визначити плату")
+            board = self.CHIP_BOARD[m.group(1)]
+            size = re.search(r"Detected flash size: (\d+)MB", info)
+            if board == "esp8266" and size and int(size.group(1)) <= 1:
+                board = "esp01"
+            say("Плата %s — завантажую прошивку…" % board)
+            path = await self.fw_file(board)
+            say("Прошиваю…", 0)
+            last = [-1]
+
+            def prog(line):
+                mm = re.search(r"\((\d+) ?%\)", line)
+                if mm and int(mm.group(1)) != last[0]:
+                    last[0] = int(mm.group(1))
+                    say("Прошиваю… %d%%" % last[0], last[0])
+            args = ["--port", port, "-b", "460800", "write_flash"] + (["--erase-all"] if msg.get("erase") else []) + ["0x0", path]
+            await self._esptool(args, prog, timeout=400)
+            say("Готово — плата перезапускається", 100)
+            return {"board": board}
+        finally:
+            self._flashing = False
