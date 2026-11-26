@@ -60,6 +60,18 @@ cat > /etc/avahi/services/iot-hub.service <<'EOF'
 EOF
 systemctl reload avahi-daemon 2>/dev/null || systemctl restart avahi-daemon || true
 
+# пошкоджений файл налаштувань (вимкнення живлення під час запису) — відновити з резервної копії
+if [ -e "$CONF" ] && ! jq -e .token "$CONF" >/dev/null 2>&1; then
+  if [ -s "$CONF.bak" ] && jq -e .token "$CONF.bak" >/dev/null 2>&1; then
+    echo "Файл налаштувань пошкоджено — відновлюю з резервної копії"
+    [ -s "$CONF" ] && cp "$CONF" "$CONF.broken-$(date +%s)"
+    install -o iothub -g iothub -m 600 "$CONF.bak" "$CONF"
+  else
+    echo "Файл налаштувань пошкоджено, резервної копії немає — хаб почне з чистого аркуша"
+    [ -s "$CONF" ] && mv "$CONF" "$CONF.broken-$(date +%s)" || rm -f "$CONF"
+  fi
+fi
+
 systemctl daemon-reload
 systemctl enable -q iot-hub
 systemctl restart iot-hub
@@ -70,7 +82,7 @@ for _ in $(seq 1 20); do [ -s "$CONF" ] && break; sleep 0.5; done
 set_conf() {  # set_conf '<jq filter>' [--arg k v ...]
   local f="$1"; shift
   local t; t=$(mktemp)
-  jq "$@" "$f" "$CONF" > "$t" && install -o iothub -g iothub -m 600 "$t" "$CONF"; rm -f "$t"
+  jq "$@" "$f" "$CONF" > "$t" && [ -s "$t" ] && install -o iothub -g iothub -m 600 "$t" "$CONF"; rm -f "$t"; sync
 }
 
 say "MQTT-брокер для плат ESP (Mosquitto на Pi)"
@@ -177,6 +189,13 @@ fi
 # ---- доступ поза домом ----
 RELAY=$(jq -r '.relay // ""' "$CONF" 2>/dev/null || echo "")
 REV=$(sha256sum "$DIR/relay/index.js" | cut -c1-12)
+# ретранслятор уже розгорнутий (наприклад, після відновлення налаштувань) — просто вказати адресу, без токена
+if [ -n "${IOTHUB_RELAY:-}" ]; then
+  systemctl stop iot-hub
+  set_conf '.relay = $r | .relayRev = $v' --arg r "${IOTHUB_RELAY%/}" --arg v "$REV"
+  systemctl start iot-hub
+  RELAY="${IOTHUB_RELAY%/}"
+fi
 OLD_REV=$(jq -r '.relayRev // ""' "$CONF" 2>/dev/null || echo "")
 if [ -z "$RELAY" ] || [ "${IOTHUB_REDEPLOY:-}" = 1 ] || [ "$REV" != "$OLD_REV" ]; then
   say "Доступ поза домом (Cloudflare Worker, безкоштовно)"

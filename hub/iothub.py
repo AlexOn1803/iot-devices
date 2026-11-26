@@ -64,11 +64,24 @@ class Config:
     def __init__(self, path: str):
         self.path = path
         self.data = {}
-        try:
-            with open(path) as f:
-                self.data = json.load(f)
-        except FileNotFoundError:
-            pass
+        # основний файл, а якщо він пошкоджений (вимкнули живлення під час запису) — резервна копія
+        for p in (path, path + ".bak"):
+            try:
+                with open(p) as f:
+                    d = json.load(f)
+                if isinstance(d, dict) and d.get("token"):
+                    self.data = d
+                    if p != path:
+                        logging.warning("config: %s пошкоджено, відновлено з резервної копії", path)
+                        self._keep_broken()
+                        self.save()
+                    break
+            except FileNotFoundError:
+                continue
+            except (ValueError, OSError) as e:
+                logging.warning("config: %s не читається: %s", p, e)
+        if not self.data and os.path.exists(path):
+            self._keep_broken()
         if not self.data.get("token"):
             self.data["token"] = hashlib.sha256(os.urandom(32)).hexdigest()[:32]
             self.save()
@@ -85,13 +98,43 @@ class Config:
     def name(self) -> str:
         return self.data.get("name") or socket.gethostname()
 
+    def _keep_broken(self):
+        try:
+            if os.path.getsize(self.path) > 0:
+                os.replace(self.path, self.path + ".broken-%d" % int(time.time()))
+        except OSError:
+            pass
+
     def save(self):
-        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+        """Надійний запис: тимчасовий файл → fsync → попередня версія в .bak → заміна → fsync теки.
+        Так раптове вимкнення живлення не лишить порожній файл."""
+        d = os.path.dirname(self.path) or "."
+        os.makedirs(d, exist_ok=True)
         tmp = self.path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
         os.chmod(tmp, 0o600)  # тут local key розеток і ключі плат
+        try:
+            if os.path.getsize(self.path) > 0:
+                with open(self.path, "rb") as src:
+                    old = src.read()
+                json.loads(old)              # у резерв — лише цілий файл
+                with open(self.path + ".bak", "wb") as b:
+                    b.write(old)
+                    b.flush()
+                    os.fsync(b.fileno())
+                os.chmod(self.path + ".bak", 0o600)
+        except (OSError, ValueError):
+            pass
         os.replace(tmp, self.path)
+        try:
+            fd = os.open(d, os.O_RDONLY)
+            os.fsync(fd)
+            os.close(fd)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------- Tuya
@@ -326,7 +369,7 @@ class EspWorker:
                 self.provisioned = True
                 log.info("esp %s: old firmware, keeping its cloud broker (update firmware for instant updates)", self.key)
                 return
-            if info.get("mqttLocal") == ip:
+            if info.get("mqttLocal") == ip and mq.get("pass") and self.hub.cfg.data.get("mqttSent", {}).get(self.key) == hashlib.sha256(mq["pass"].encode()).hexdigest()[:12]:
                 self.provisioned = True
                 return
             # брокер Pi — основний, хмарний на платі лишається резервом
@@ -334,6 +377,9 @@ class EspWorker:
             async with s.post(self.base() + "/api/mqtt", headers=self.headers(), json=body) as r:
                 if r.status < 300:
                     self.provisioned = True
+                    # запам'ятати, з яким паролем налаштовано плату (пароль брокера міг змінитися)
+                    self.hub.cfg.data.setdefault("mqttSent", {})[self.key] = hashlib.sha256((mq.get("pass") or "").encode()).hexdigest()[:12]
+                    self.hub.cfg.save()
                     log.info("esp %s now reports to the Pi broker", self.key)
         except Exception as e:
             log.info("esp %s provisioning: %s", self.key, e)
