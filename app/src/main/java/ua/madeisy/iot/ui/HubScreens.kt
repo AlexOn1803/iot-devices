@@ -60,6 +60,8 @@ fun HubCard(snackbar: SnackbarHostState) {
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { hub.reconnectNow() }) { Text("Перепідключити") }
+                // хаб перевстановили/скинули — новий токен: взяти його заново (вдома, у вікно підключення)
+                OutlinedButton(enabled = !busy && s.lanHost.isNotBlank(), onClick = { pair(s.lanHost) }) { Text("Підключити заново") }
                 TextButton(onClick = { hub.forget() }) { Text("Від'єднати") }
             }
         } else {
