@@ -638,9 +638,38 @@ async function deleteRule(btn) {
 }
 
 // ------------------------------------------------------------------ термостати й розклади
+// розклади, що живуть на самих платах ESP (поле plan у компонентах)
+let boardCfg = null, boardLoading = false;
+async function loadBoards() {
+  if (boardLoading) return; boardLoading = true;
+  const out = {};
+  for (const d of realDevices().filter((x) => x.kind === "esp")) {
+    try { const r = await call("esp_config_get", { key: d.key }, 15000); out[d.key] = { cfg: r.config, info: r.info }; }
+    catch (e) { out[d.key] = { error: e.message }; }
+  }
+  boardCfg = out; boardLoading = false;
+  if (view.tab === "auto") softRender();
+}
+function boardPlans() {
+  const list = [];
+  for (const [key, b] of Object.entries(boardCfg || {})) {
+    (b.cfg && b.cfg.comps || []).forEach((c, ci) => (c.plan || []).forEach((p, pi) => list.push({ id: `b:${key}:${ci}:${pi}`, board: true, deviceKey: key, comp: ci, compName: c.name,
+      hour: Math.floor(p.t / 60), minute: p.t % 60, days: p.d, turnOn: !!p.on, enabled: true, clock: b.info && b.info.clock })));
+  }
+  return list;
+}
+async function saveBoardPlan(key, comp, entry, removeId) {
+  const r = await call("esp_config_get", { key }, 15000), cfg = r.config;
+  if (removeId) { const [, , ci, pi] = removeId.split(":"); const c = cfg.comps[Number(ci)]; if (c && c.plan) c.plan.splice(Number(pi), 1); }
+  if (entry) { const c = cfg.comps[comp]; if (!c) throw new Error("Немає такого виходу на платі"); c.plan = (c.plan || []).concat([entry]); }
+  await call("esp_config_set", { key, config: cfg }, 20000);
+}
+
 function autoView() {
   if (!admin) return `<div class="page"><div class="muted">Завантаження…</div></div>`;
-  const th = admin.thermostats || [], sc = admin.schedules || [], st = admin.thermoStatus || {};
+  if (!boardCfg) setTimeout(loadBoards, 0);
+  const th = admin.thermostats || [], st = admin.thermoStatus || {};
+  const sc = (admin.schedules || []).concat(boardPlans());
   const tEdit = view.thermo, sEdit = view.sched;
   return `<div class="page stack">
     <div class="card"><div class="head"><h3 style="flex:1">Термостати</h3><button onclick="go('auto',{thermo:'new'})">+ Додати</button></div>
@@ -648,9 +677,9 @@ function autoView() {
       ${tEdit ? thermoForm(tEdit === "new" ? null : th.find((x) => x.id === tEdit)) : ""}
       <div class="list">${th.map((t) => `<div class="item"><div class="t"><div>${esc(t.name)}</div><div class="s">${esc(nameOf(t.sensorKey))} → ${esc(nameOf(t.targetKey))} · ${t.mode === "COOL" ? `≥ ${t.onAt} °C увімк., ≤ ${t.offAt} °C вимк.` : `≤ ${t.onAt} °C увімк., ≥ ${t.offAt} °C вимк.`}</div><div class="s acc">${esc(t.enabled === false ? "вимкнено" : st[t.id] || "")}</div></div><button class="small" onclick="go('auto',{thermo:'${esc(t.id)}'})">Змінити</button></div>`).join("") || `<div class="empty">Немає</div>`}</div></div>
     <div class="card"><div class="head"><h3 style="flex:1">Розклади</h3><button onclick="go('auto',{sched:'new'})">+ Додати</button></div>
-      <div class="muted">Увімкнути чи вимкнути пристрій у певний час. Виконує Pi.</div>
+      <div class="muted">Увімкнути чи вимкнути пристрій у певний час. Розклад плати ESP зберігається на самій платі й працює навіть без Pi та інтернету (годинник плати бере час з мережі). Розклад розеток Tuya виконує Pi.${boardCfg ? "" : " Читаю розклади з плат…"}</div>
       ${sEdit ? schedForm(sEdit === "new" ? null : sc.find((x) => x.id === sEdit)) : ""}
-      <div class="list">${sc.slice().sort((a, b) => a.hour * 60 + a.minute - b.hour * 60 - b.minute).map((s) => `<div class="item"><div class="t"><div>${hhmm(s.hour * 60 + s.minute)} · ${s.turnOn ? "увімкнути" : "вимкнути"} ${esc(nameOf(s.deviceKey))}${(dev(s.deviceKey) || {}).kind === "esp" ? " · " + esc(s.comp >= 0 ? ((comps(s.deviceKey).find((c) => c.i === s.comp) || {}).name || "вихід " + s.comp) : "перший вихід") : ""}</div><div class="s">${daysText(s.days)}${s.enabled === false ? " · вимкнено" : ""}</div></div><button class="small" onclick="go('auto',{sched:'${esc(s.id)}'})">Змінити</button></div>`).join("") || `<div class="empty">Немає</div>`}</div></div></div>`;
+      <div class="list">${sc.slice().sort((a, b) => a.hour * 60 + a.minute - b.hour * 60 - b.minute).map((s) => `<div class="item"><div class="t"><div>${hhmm(s.hour * 60 + s.minute)} · ${s.turnOn ? "увімкнути" : "вимкнути"} ${esc(nameOf(s.deviceKey))}${(dev(s.deviceKey) || {}).kind === "esp" ? " · " + esc(s.board ? s.compName : s.comp >= 0 ? ((comps(s.deviceKey).find((c) => c.i === s.comp) || {}).name || "вихід " + s.comp) : "перший вихід") : ""}</div><div class="s ${s.board ? "acc" : ""}">${daysText(s.days)}${s.enabled === false ? " · вимкнено" : ""}${s.board ? " · на платі" + (s.clock ? " (годинник плати " + esc(s.clock) + ")" : " — годинник ще не синхронізовано") : (dev(s.deviceKey) || {}).kind === "esp" ? " · виконує Pi" : ""}</div></div>${!s.board && (dev(s.deviceKey) || {}).kind === "esp" && s.days ? `<button class="small" onclick="moveToBoard('${esc(s.id)}',this)">На плату</button>` : ""}<button class="small" onclick="go('auto',{sched:'${esc(s.id)}'})">Змінити</button></div>`).join("") || `<div class="empty">Немає</div>`}</div></div></div>`;
 }
 function thermoForm(t) {
   t = t || { id: uid(), name: "Термостат", enabled: true, sensorKey: "", sensorIndex: 0, targetKey: "", mode: "HEAT", onAt: 18, offAt: 19 };
@@ -686,8 +715,34 @@ function schedForm(s) {
 }
 function schedCompSel(key, sel) { if ((dev(key) || {}).kind !== "esp") return ""; return `Вихід<select id="scComp"><option value="-1">перший вихід</option>${comps(key).filter((c) => OUT_TYPES.includes(c.t)).map((c) => `<option value="${c.i}" ${sel === c.i ? "selected" : ""}>${esc(c.name)}</option>`).join("")}</select>`; }
 function schedRedraw() { $("scCompBox").innerHTML = schedCompSel($("scDev").value, -1); }
+async function moveToBoard(id, btn) {
+  const s = (admin.schedules || []).find((x) => x.id === id); if (!s) return;
+  const outs = comps(s.deviceKey).filter((c) => OUT_TYPES.includes(c.t));
+  const comp = s.comp >= 0 ? s.comp : outs.length ? outs[0].i : -1;
+  if (comp < 0) return toast("На платі немає виходів");
+  const ok = await act(btn, async () => { await saveBoardPlan(s.deviceKey, comp, { d: s.days, t: s.hour * 60 + s.minute, on: !!s.turnOn });
+    return call("sched_set", { schedules: (admin.schedules || []).filter((x) => x.id !== id) }); }, "Перенесено на плату");
+  if (ok) { boardCfg = null; go("auto"); }
+}
 async function saveSched(btn, del) {
   const id = $("scForm").dataset.id, list = (admin.schedules || []).filter((x) => x.id !== id);
+  const devKey = $("scDev").value, isEsp = (dev(devKey) || {}).kind === "esp";
+  if (id.startsWith("b:") || (isEsp && !del)) {
+    // розклад плати: зберігається на самій платі
+    const m = fromHHMM($("scTime").value); let days = 0; document.querySelectorAll(".scDay").forEach((c) => { if (c.checked) days |= 1 << Number(c.dataset.b); });
+    if (!del && !days) return toast("Для розкладу на платі вибери хоча б один день");
+    const outs = comps(devKey).filter((c) => OUT_TYPES.includes(c.t));
+    let comp = $("scComp") ? Number($("scComp").value) : -1; if (comp < 0 && outs.length) comp = outs[0].i;
+    const ok = await act(btn, async () => {
+      const oldKey = id.startsWith("b:") ? id.split(":")[1] : null;
+      if (oldKey && (del || oldKey !== devKey)) await saveBoardPlan(oldKey, -1, null, id);
+      if (!del) await saveBoardPlan(devKey, comp, { d: days, t: m, on: $("scOn").value === "1" }, oldKey === devKey ? id : null);
+      if (!id.startsWith("b:") && (admin.schedules || []).some((x) => x.id === id)) return call("sched_set", { schedules: list });
+      return {};
+    }, del ? "Видалено" : "Збережено на платі");
+    if (ok) { boardCfg = null; go("auto"); }
+    return;
+  }
   if (!del) {
     const m = fromHHMM($("scTime").value); let days = 0; document.querySelectorAll(".scDay").forEach((c) => { if (c.checked) days |= 1 << Number(c.dataset.b); });
     const s = { id, deviceKey: $("scDev").value, hour: Math.floor(m / 60), minute: m % 60, days, turnOn: $("scOn").value === "1", enabled: $("scEn").checked, comp: $("scComp") ? Number($("scComp").value) : -1 };

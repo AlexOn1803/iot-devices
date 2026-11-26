@@ -96,6 +96,9 @@ struct Period {
 
 enum CompType { C_RELAY, C_BUTTON, C_PWM, C_WS2812, C_DHT, C_DS18B20, C_AHT, C_ANALOG, C_INPUT, C_THERMO, C_BME, C_SHT21, C_TUYA, C_UNKNOWN };
 
+/** Розклад виходу на самій платі: у дні d (біт 0 — Пн … біт 6 — Нд) о t хвилин від півночі — увімкнути/вимкнути. */
+struct PlanEntry { uint8_t d; uint16_t t; bool on; };
+
 struct Comp {
   CompType type = C_UNKNOWN;
   String typeName;
@@ -117,6 +120,7 @@ struct Comp {
   uint32_t saveAt = 0;          // зберегти стан стрічки (на випадок вимкнення живлення)
   FxState fxs;
   uint32_t pulseMs = 0;         // реле-«кнопка»: увімкнути на стільки мс і вимкнути
+  std::vector<PlanEntry> plan;  // розклад увімкнення/вимкнення (працює без Pi й інтернету, час — з NTP)
   int ledcCh = -1;
   Adafruit_NeoPixel* strip = nullptr;
   // кнопка
@@ -289,7 +293,16 @@ void buildCompsLocked(JsonArrayConst arr) {
     return wireStarted;
   };
   for (JsonObjectConst o : arr) {
+    std::vector<PlanEntry> plan;
+    if (o["plan"].is<JsonArrayConst>()) {
+      for (JsonObjectConst p : o["plan"].as<JsonArrayConst>()) {
+        uint8_t d = (int)(p["d"] | 0) & 127;
+        int t = p["t"] | -1;
+        if (d && t >= 0 && t < 1440) plan.push_back({d, (uint16_t)t, (bool)(p["on"] | false)});
+      }
+    }
     Comp c;
+    c.plan = plan;
     c.typeName = o["t"] | "";
     c.type = parseType(c.typeName);
     c.name = o["name"] | c.typeName;
@@ -810,6 +823,12 @@ String infoJson() {
   doc["mqttHost"] = mqttHost;
   doc["mqttLocal"] = mqLocHost;       // є поле — прошивка вміє два брокери
   doc["mqttVia"] = mqttOnLocal ? "local" : "cloud";
+  if (timeValid()) {   // годинник плати (NTP) — для розкладу
+    time_t t = time(nullptr); struct tm lt; localtime_r(&t, &lt);
+    char buf[24]; strftime(buf, sizeof(buf), "%H:%M", &lt);
+    doc["clock"] = buf;
+  }
+  doc["tz"] = tzPosix;
   String s;
   serializeJson(doc, s);
   return s;
@@ -914,6 +933,29 @@ void applyCommands(JsonVariant doc) {
       persistThermo(i);
     }
   }
+}
+
+/** Розклад на платі: раз на хвилину (коли годинник синхронізовано з NTP) вмикає/вимикає виходи. */
+void handlePlans() {
+  static int lastWm = -1;
+  int wm = weekMinute();
+  if (wm < 0 || wm == lastWm) return;
+  bool first = lastWm < 0;
+  lastWm = wm;
+  if (first) return;           // щойно отримали час — не спрацьовуємо «заднім числом» у ту ж хвилину
+  int day = wm / 1440, minute = wm % 1440;
+  JsonDocument cmds;
+  JsonArray list = cmds.to<JsonArray>();
+  for (size_t i = 0; i < comps.size(); i++) {
+    for (const auto& p : comps[i].plan) {
+      if ((p.d >> day) & 1 && p.t == minute) {
+        JsonObject o = list.add<JsonObject>();
+        o["i"] = (int)i;
+        o["on"] = p.on;
+      }
+    }
+  }
+  if (list.size()) applyCommands(cmds.as<JsonVariant>());
 }
 
 void handleSet() {
@@ -1628,6 +1670,7 @@ void loop() {
   handleButtons(now);
   readSensors(now);
   handleThermostats(now);
+  handlePlans();
   mqttLoop(now);
   ledLoop(now);
 

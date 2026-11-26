@@ -36,6 +36,18 @@ def cpu_temp():
         return None
 
 
+def posix_tz():
+    """Часовий пояс Pi у форматі POSIX (останній рядок файлу зони), напр. EET-2EEST,M3.5.0/3,M10.5.0/4."""
+    try:
+        with open("/etc/localtime", "rb") as f:
+            tail = f.read().rstrip(b"\n").rsplit(b"\n", 1)[-1].decode()
+        if tail and len(tail) < 64 and not tail.startswith("TZif"):
+            return tail
+    except OSError:
+        pass
+    return "EET-2EEST,M3.5.0/3,M10.5.0/4"
+
+
 def tuya_dps_from_mapping(mapping: dict) -> dict:
     """Номери DP і масштаби з опису пристрою в хмарі Tuya (як у додатку — DpMap)."""
     out = {"switch": 1, "countdown": 9, "energy": 17, "current": 18, "power": 19, "voltage": 20,
@@ -303,6 +315,7 @@ class Admin:
             elif not c.get("key"):
                 prev = next((o for o in old_tuya if o.get("id") == c.get("id")), None)
                 c["key"] = (prev or {}).get("key", "")
+        cfg.setdefault("tz", posix_tz())    # годинник плати — за місцевим часом Pi (для розкладу)
         res = await self._esp_call(d["ip"], d.get("apiKey"), "POST", "/api/config", cfg, timeout=10)
         if cfg.get("name") and cfg["name"] != d.get("name"):
             await self.on_device_save({"device": {"key": d["key"], "kind": "ESP", "name": cfg["name"]}})
