@@ -778,10 +778,11 @@ class Hub:
                         devs[i] = dict(devs[i], **d)
             if msg.get("inverter"):
                 self.cfg.data["inverter"] = msg["inverter"]
-            if isinstance(msg.get("thermostats"), list):
-                self.cfg.data["thermostats"] = msg["thermostats"]
-            if isinstance(msg.get("schedules"), list):
-                self.cfg.data["schedules"] = msg["schedules"]
+            # термостати й розклади з телефона лише переносяться на Pi, якщо там їх ще немає;
+            # далі головні — ті, що в панелі хаба (інакше телефон затирав би зміни з панелі)
+            for k in ("thermostats", "schedules"):
+                if isinstance(msg.get(k), list) and msg[k] and not self.cfg.data.get(k):
+                    self.cfg.data[k] = msg[k]
             if isinstance(msg.get("rules"), list):
                 self.rules.set_rules(msg["rules"])
             self.cfg.save()

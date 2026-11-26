@@ -298,6 +298,17 @@ internal fun SchedulesCard(deviceKey: String) {
     val list = all.filter { it.deviceKey == deviceKey }.sortedBy { it.hour * 60 + it.minute }
     var editing by remember { mutableStateOf<Schedule?>(null) }
 
+    val hubCfg by app.controller.hub.settings.collectAsState()
+    if (hubCfg.configured) {
+        SectionCard("Розклад") {
+            Text(
+                "Розклади виконує Raspberry Pi цілодобово. Додавай і змінюй їх у веб-панелі хаба — вкладка «Термостати й розклади» " +
+                    "(там же можна вибрати вихід плати: світло, стрічку тощо).",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
     SectionCard("Розклад") {
         if (list.isEmpty()) {
             Text(

@@ -650,7 +650,7 @@ function autoView() {
     <div class="card"><div class="head"><h3 style="flex:1">Розклади</h3><button onclick="go('auto',{sched:'new'})">+ Додати</button></div>
       <div class="muted">Увімкнути чи вимкнути пристрій у певний час. Виконує Pi.</div>
       ${sEdit ? schedForm(sEdit === "new" ? null : sc.find((x) => x.id === sEdit)) : ""}
-      <div class="list">${sc.slice().sort((a, b) => a.hour * 60 + a.minute - b.hour * 60 - b.minute).map((s) => `<div class="item"><div class="t"><div>${hhmm(s.hour * 60 + s.minute)} · ${s.turnOn ? "увімкнути" : "вимкнути"} ${esc(nameOf(s.deviceKey))}</div><div class="s">${daysText(s.days)}${s.enabled === false ? " · вимкнено" : ""}</div></div><button class="small" onclick="go('auto',{sched:'${esc(s.id)}'})">Змінити</button></div>`).join("") || `<div class="empty">Немає</div>`}</div></div></div>`;
+      <div class="list">${sc.slice().sort((a, b) => a.hour * 60 + a.minute - b.hour * 60 - b.minute).map((s) => `<div class="item"><div class="t"><div>${hhmm(s.hour * 60 + s.minute)} · ${s.turnOn ? "увімкнути" : "вимкнути"} ${esc(nameOf(s.deviceKey))}${(dev(s.deviceKey) || {}).kind === "esp" ? " · " + esc(s.comp >= 0 ? ((comps(s.deviceKey).find((c) => c.i === s.comp) || {}).name || "вихід " + s.comp) : "перший вихід") : ""}</div><div class="s">${daysText(s.days)}${s.enabled === false ? " · вимкнено" : ""}</div></div><button class="small" onclick="go('auto',{sched:'${esc(s.id)}'})">Змінити</button></div>`).join("") || `<div class="empty">Немає</div>`}</div></div></div>`;
 }
 function thermoForm(t) {
   t = t || { id: uid(), name: "Термостат", enabled: true, sensorKey: "", sensorIndex: 0, targetKey: "", mode: "HEAT", onAt: 18, offAt: 19 };
@@ -676,7 +676,7 @@ async function saveThermo(btn, del) {
   if (await act(btn, () => call("thermo_set", { thermostats: list }), del ? "Видалено" : "Збережено")) go("auto");
 }
 function schedForm(s) {
-  s = s || { id: uid(), deviceKey: "", hour: 7, minute: 0, days: 31, turnOn: true, enabled: true, comp: -1 };
+  s = s ? Object.assign({ comp: -1 }, s) : { id: uid(), deviceKey: "", hour: 7, minute: 0, days: 31, turnOn: true, enabled: true, comp: -1 };
   return `<div class="sub" id="scForm" data-id="${esc(s.id)}"><div class="row"><label class="f">Пристрій<select id="scDev" onchange="schedRedraw()">${devOptions(s.deviceKey, (d) => d.kind === "tuya" || d.kind === "esp")}</select></label>
     <label class="f" id="scCompBox">${schedCompSel(s.deviceKey, s.comp)}</label>
     <label class="f">Час<input id="scTime" type="time" value="${hhmm(s.hour * 60 + s.minute)}"></label><label class="f">Дія<select id="scOn"><option value="1" ${s.turnOn ? "selected" : ""}>увімкнути</option><option value="0" ${!s.turnOn ? "selected" : ""}>вимкнути</option></select></label></div>

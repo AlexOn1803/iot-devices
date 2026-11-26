@@ -75,6 +75,8 @@ class ScheduleReceiver : BroadcastReceiver() {
         val app = IotApp.instance
         val s = app.storage.schedules.value.firstOrNull { it.id == id } ?: return
         if (!s.enabled) return
+        // з Raspberry Pi розклади виконує вона — телефон не дублює (і не шле хибних «не вдалося»)
+        if (app.controller.hubMode()) { if (s.days != 0) ScheduleManager.schedule(context, s); return }
         val pending = goAsync()
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {

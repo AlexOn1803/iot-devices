@@ -163,16 +163,18 @@ data class Schedule(
     val days: Int,
     val turnOn: Boolean,
     val enabled: Boolean = true,
+    /** Для плати ESP — який вихід (-1 — перший). */
+    val comp: Int = -1,
 ) {
     fun toJson(): JSONObject = JSONObject().put("id", id).put("deviceKey", deviceKey)
         .put("hour", hour).put("minute", minute).put("days", days)
-        .put("turnOn", turnOn).put("enabled", enabled)
+        .put("turnOn", turnOn).put("enabled", enabled).put("comp", comp)
 
     companion object {
         fun fromJson(j: JSONObject) = Schedule(
             id = j.getString("id"), deviceKey = j.getString("deviceKey"),
             hour = j.getInt("hour"), minute = j.getInt("minute"), days = j.getInt("days"),
-            turnOn = j.getBoolean("turnOn"), enabled = j.optBoolean("enabled", true),
+            turnOn = j.getBoolean("turnOn"), enabled = j.optBoolean("enabled", true), comp = j.optInt("comp", -1),
         )
     }
 }
