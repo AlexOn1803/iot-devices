@@ -581,3 +581,86 @@ class Admin:
             return {"board": board}
         finally:
             self._flashing = False
+
+    # ------------------------------------------------------------ оновлення хаба й консоль
+    def _installed(self):
+        try:
+            with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "VERSION.json")) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    async def _gh(self, s, path):
+        async with s.get("https://api.github.com/repos/%s/%s" % (REPO, path), headers={"Accept": "application/vnd.github+json"}) as r:
+            if r.status >= 300:
+                raise IOError("GitHub відповів %d" % r.status)
+            return await r.json()
+
+    async def on_hub_update_check(self, msg):
+        inst = self._installed()
+        branch = "main" if self.data.get("channel") == "latest" else "dev"
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as s:
+            head = await self._gh(s, "commits/" + branch)
+            latest = head["sha"]
+            changes = []
+            if inst.get("sha") and re.fullmatch(r"[0-9a-f]{40}", inst["sha"]) and inst["sha"] != latest:
+                try:
+                    cmp = await self._gh(s, "compare/%s...%s" % (inst["sha"], latest))
+                    changes = [c["commit"]["message"].split("\n")[0] for c in cmp.get("commits", [])][-30:]
+                except IOError:
+                    pass
+        return {"installed": inst, "branch": branch, "latest": latest,
+                "latestDate": head.get("commit", {}).get("committer", {}).get("date"),
+                "upToDate": inst.get("sha") == latest, "changes": changes}
+
+    async def on_hub_update(self, msg):
+        sha = msg.get("sha") or ""
+        if not re.fullmatch(r"[0-9a-f]{7,40}", sha):
+            raise ValueError("Невідома версія")
+        with open("/etc/iot-hub/update-target", "w") as f:
+            f.write(sha)
+        p = await asyncio.create_subprocess_exec("sudo", "-n", "/usr/bin/systemctl", "start", "--no-block", "iot-hub-update.service",
+                                                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await p.communicate()
+        if p.returncode != 0:
+            raise IOError("Не вдалося запустити оновлення (%s). Один раз онови хаб командою встановлення по SSH." % out.decode(errors="replace").strip()[:160])
+        log.warning("hub update to %s started from panel", sha)
+        return {}
+
+    async def on_hub_update_log(self, msg):
+        try:
+            with open("/var/log/iot-hub-update.log", encoding="utf-8", errors="replace") as f:
+                lines = f.read().splitlines()[-80:]
+        except OSError:
+            lines = []
+        # прибрати кольорові коди терміналу
+        return {"log": "\n".join(re.sub(r"\x1b\[[0-9;]*m", "", l) for l in lines)}
+
+    @staticmethod
+    def _root_allowed():
+        return os.path.exists("/etc/sudoers.d/iot-hub-console")
+
+    async def on_console(self, msg):
+        cmd = (msg.get("cmd") or "").strip()
+        if not cmd:
+            raise ValueError("Порожня команда")
+        root = bool(msg.get("root"))
+        if root and not self._root_allowed():
+            raise PermissionError("Root вимкнено. Дозволити можна лише на самій Pi: sudo iot-hub-console-root on")
+        log.warning("console%s: %s", " (root)" if root else "", cmd)
+        argv = (["sudo", "-n", "/bin/bash", "-c", cmd] if root else ["/bin/bash", "-c", cmd])
+        p = await asyncio.create_subprocess_exec(*argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                                                 stdin=asyncio.subprocess.DEVNULL, cwd="/tmp")
+        try:
+            out, _ = await asyncio.wait_for(p.communicate(), int(msg.get("timeout") or 60))
+            code = p.returncode
+        except asyncio.TimeoutError:
+            p.kill()
+            out, code = "(час вийшов — команду зупинено)".encode(), -1
+        text = out.decode(errors="replace")
+        if len(text) > 60000:
+            text = "…\n" + text[-60000:]
+        return {"out": text, "code": code, "rootAllowed": self._root_allowed()}
+
+    async def on_console_info(self, msg):
+        return {"rootAllowed": self._root_allowed(), "user": os.environ.get("USER") or "iothub"}

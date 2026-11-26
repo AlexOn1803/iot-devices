@@ -22,7 +22,7 @@ APT python3-venv python3-pip avahi-daemon avahi-utils curl jq mosquitto mosquitt
 
 say "Файли хаба"
 id iothub >/dev/null 2>&1 || useradd --system --home "$DIR" --shell /usr/sbin/nologin iothub
-usermod -aG dialout iothub
+usermod -aG dialout,video,systemd-journal iothub 2>/dev/null || usermod -aG dialout iothub
 mkdir -p "$DIR/relay" "$DIR/web" /etc/iot-hub
 for f in iothub.py rules.py mqttbridge.py admin.py web/index.html; do curl -fsSL "$RAW/hub/$f" -o "$DIR/$f"; done
 curl -fsSL "$RAW/relay/src/index.js" -o "$DIR/relay/index.js"
@@ -31,6 +31,44 @@ curl -fsSL "$RAW/relay/src/index.js" -o "$DIR/relay/index.js"
 "$DIR/venv/bin/pip" install -q --upgrade aiohttp tinytuya paho-mqtt "esptool>=4.7,<5"
 chown -R iothub:iothub "$DIR" /etc/iot-hub
 chmod 700 /etc/iot-hub
+
+# яку версію встановлено (для оновлення з панелі)
+SHA=$(curl -fsSL "https://api.github.com/repos/AlexOn1803/iot-devices/commits/$BRANCH" 2>/dev/null | jq -r '.sha // empty' || true)
+jq -n --arg b "$BRANCH" --arg s "${SHA:-$BRANCH}" --arg t "$(date -Iseconds)" '{branch:$b, sha:$s, at:$t}' > "$DIR/VERSION.json"
+chown iothub:iothub "$DIR/VERSION.json"
+
+say "Оновлення й консоль з панелі"
+# служба оновлення: ставить версію, яку хаб записав у update-target (хаб може лише запустити її)
+cat > /etc/systemd/system/iot-hub-update.service <<'EOF'
+[Unit]
+Description=IoT Devices hub self-update
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'T=$(tr -cd "0-9a-zA-Z._-" < /etc/iot-hub/update-target 2>/dev/null); T=${T:-dev}; echo "Оновлення до $T — $(date)"; curl -fsSL "https://raw.githubusercontent.com/AlexOn1803/iot-devices/$T/hub/install.sh" | IOTHUB_BRANCH="$T" bash; echo "Код завершення: $?"'
+StandardOutput=file:/var/log/iot-hub-update.log
+StandardError=inherit
+EOF
+touch /var/log/iot-hub-update.log && chmod 644 /var/log/iot-hub-update.log
+cat > /etc/sudoers.d/iot-hub <<'EOF'
+# хаб IoT може лише запустити своє оновлення
+iothub ALL=(root) NOPASSWD: /usr/bin/systemctl start --no-block iot-hub-update.service
+EOF
+chmod 440 /etc/sudoers.d/iot-hub
+visudo -cf /etc/sudoers.d/iot-hub >/dev/null || rm -f /etc/sudoers.d/iot-hub
+# права root для консолі в панелі — лише вручну на самій Pi
+cat > /usr/local/bin/iot-hub-console-root <<'EOF'
+#!/bin/sh
+# Дозволити (on) чи заборонити (off) команди з правами root у консолі веб-панелі хаба.
+F=/etc/sudoers.d/iot-hub-console
+case "$1" in
+  on)  echo "iothub ALL=(root) NOPASSWD: /bin/bash" > $F && chmod 440 $F && visudo -cf $F >/dev/null && echo "Консоль панелі: root дозволено" || { rm -f $F; echo "Помилка"; } ;;
+  off) rm -f $F && echo "Консоль панелі: root заборонено" ;;
+  *)   [ -f $F ] && echo "root дозволено (вимкнути: sudo iot-hub-console-root off)" || echo "root заборонено (дозволити: sudo iot-hub-console-root on)" ;;
+esac
+EOF
+chmod 755 /usr/local/bin/iot-hub-console-root
 
 say "Служба systemd"
 cat > /etc/systemd/system/iot-hub.service <<EOF
@@ -42,7 +80,7 @@ Wants=network-online.target
 [Service]
 User=iothub
 # доступ до USB-портів — прошивати плати ESP, під'єднані до Pi
-SupplementaryGroups=dialout
+SupplementaryGroups=dialout video systemd-journal
 Environment=IOTHUB_CONFIG=$CONF
 ExecStart=$DIR/venv/bin/python $DIR/iothub.py
 Restart=always
@@ -258,4 +296,5 @@ echo "  IoT Devices → Налаштування → Хаб Raspberry Pi → З�
 echo "Якщо не знайде — введи адресу $IP"
 echo "Відкрити підключення ще на 15 хв:  sudo systemctl kill -s USR1 iot-hub"
 echo "Нагадати PIN панелі:                sudo iot-hub-pin"
+echo "Root у консолі панелі:              sudo iot-hub-console-root on|off"
 echo "Журнал хаба:                        journalctl -u iot-hub -f"

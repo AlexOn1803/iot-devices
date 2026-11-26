@@ -78,6 +78,7 @@
   #login input { font: 28px/1 monospace; letter-spacing: 8px; text-align: center; width: 100%; padding: 12px; border-radius: 12px; border: 0; background: var(--card); margin: 16px 0; }
   .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--card2); padding: 10px 16px; border-radius: 12px; display: none; max-width: 90vw; z-index: 9; box-shadow: 0 4px 20px rgba(0,0,0,.3); }
   .empty { color: var(--sub); padding: 8px 2px; }
+  pre.out { background: var(--card2); border-radius: 10px; padding: 10px; font: 13px/1.4 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; max-height: 420px; overflow: auto; margin: 0; }
   .days { display: flex; gap: 4px; flex-wrap: wrap; }
   .days label { display: flex; flex-direction: column; align-items: center; font-size: 12px; color: var(--sub); }
   .muted { color: var(--sub); font-size: 14px; }
@@ -755,6 +756,7 @@ async function saveSched(btn, del) {
 // ------------------------------------------------------------------ налаштування
 function settingsView() {
   if (!admin) return `<div class="page"><div class="muted">Завантаження…</div></div>`;
+  if (!settingsView.asked) { settingsView.asked = true; setTimeout(conInfo, 0); }
   const h = admin.hub || {}, inv = admin.inverter || {}, tc = admin.tuyaCloud || {};
   const up = h.uptime != null ? (h.uptime > 86400 ? Math.floor(h.uptime / 86400) + " д " : "") + Math.floor(h.uptime % 86400 / 3600) + " год" : "—";
   return `<div class="page stack">
@@ -795,7 +797,21 @@ function settingsView() {
       <div class="muted">Поза домом: ${h.relay ? `<code>${esc(h.relay)}</code>` : "не налаштовано"}</div>
       <div class="row"><label class="f" style="max-width:200px">Новий PIN (6 цифр)<input id="newPin" inputmode="numeric" maxlength="6"></label><button onclick="act(this,()=>call('pin_set',{pin:$('newPin').value}),'PIN змінено')">Змінити PIN</button></div>
       <div class="row"><label class="f" style="max-width:260px">Прошивки плат брати з<select id="chan" onchange="act(null,()=>call('channel_set',{channel:this.value}),'Збережено')"><option value="beta" ${h.channel !== "latest" ? "selected" : ""}>бета (нове першим)</option><option value="latest" ${h.channel === "latest" ? "selected" : ""}>стабільна</option></select></label></div>
-      <div class="muted">Сповіщення від правил показуються тут, у панелі.</div></div></div>`;
+      <div class="muted">Сповіщення від правил показуються тут, у панелі.</div></div>
+
+    <div class="card"><h3>Оновлення хаба</h3>
+      <div class="muted">Pi сама завантажить нову версію з GitHub і перевстановиться (налаштування зберігаються). Панель на хвилину втратить зв'язок і підключиться знову.</div>
+      <div class="row"><button onclick="updCheck(this)">Перевірити оновлення</button>${upd && !upd.upToDate ? `<button class="primary" onclick="updRun(this)">Оновити хаб</button>` : ""}<button class="ghost" onclick="updLog(this)">Журнал оновлення</button></div>
+      ${upd ? `<div class="muted">Встановлено: <code>${esc((upd.installed.sha || "?").slice(0, 7))}</code> (${esc(upd.installed.branch || "?")}${upd.installed.at ? ", " + esc(upd.installed.at.slice(0, 16).replace("T", " ")) : ""}) · остання: <code>${esc(upd.latest.slice(0, 7))}</code>${upd.latestDate ? " від " + esc(upd.latestDate.slice(0, 16).replace("T", " ")) : ""} — ${upd.upToDate ? "<b>актуально</b>" : "<b>є оновлення</b>"}</div>
+        ${upd.changes && upd.changes.length ? `<details open><summary>Що нового (${upd.changes.length})</summary><ul style="margin:6px 0;padding-left:20px">${upd.changes.slice().reverse().map((c) => `<li>${esc(c)}</li>`).join("")}</ul></details>` : ""}` : ""}
+      ${updText != null ? `<pre class="out" id="updOut">${esc(updText)}</pre>` : ""}</div>
+
+    <div class="card"><h3>Консоль Raspberry Pi</h3>
+      <div class="muted">Команди виконуються на Pi від користувача хаба${conRoot ? "" : " (без прав root)"}. Кожна команда записується в журнал хаба. ${conRoot ? "<b>Root дозволено</b> — вимкнути на Pi: <code>sudo iot-hub-console-root off</code>" : "Root (sudo) вмикається лише на самій Pi: <code>sudo iot-hub-console-root on</code>"}</div>
+      <div class="row" style="gap:6px">${[["Температура", "vcgencmd measure_temp"], ["Аптайм", "uptime"], ["Диск", "df -h /"], ["Пам'ять", "free -h"], ["Журнал хаба", "journalctl -u iot-hub -n 40 --no-pager"], ["Wi-Fi плат (MQTT)", "ss -tn state established '( sport = :1883 )'"], ["IP", "hostname -I"]].map(([l, c]) => `<button class="small" onclick="$('conCmd').value=${esc(JSON.stringify(c))};conRun()">${l}</button>`).join("")}</div>
+      <div class="row"><input id="conCmd" style="flex:1;min-width:200px;font-family:ui-monospace,monospace" placeholder="напр.: ls -la /opt/iot-hub" onkeydown="if(event.key==='Enter')conRun()">
+        <label class="c"><input type="checkbox" id="conRootCb" ${conRoot ? "" : "disabled"}> root</label><button class="primary" id="conBtn" onclick="conRun()">Виконати</button></div>
+      ${conOut != null ? `<pre class="out" id="conOut">${esc(conOut)}</pre>` : ""}</div></div>`;
 }
 // ---------------- прошивка через USB
 let usbPortList = null;
@@ -849,6 +865,45 @@ async function webFlash(btn) {
     btn.disabled = false;
     try { if (transport) await transport.disconnect(); } catch (e) { /* ок */ }
   }
+}
+
+// ---------------- оновлення хаба
+let upd = null, updText = null, updTimer = null;
+async function updCheck(btn) { const r = await act(btn, () => call("hub_update_check", {}, 30000)); if (r) { upd = r; render(); } }
+async function updRun(btn) {
+  if (!confirm("Оновити хаб до " + upd.latest.slice(0, 7) + "? Панель на хвилину втратить зв'язок.")) return;
+  if (await act(btn, () => call("hub_update", { sha: upd.latest }), "Оновлення запущено")) { updText = "Оновлення запущено…"; render(); updPoll(); }
+}
+async function updLog(btn) { const r = await act(btn, () => call("hub_update_log")); if (r) { updText = r.log || "(журнал порожній)"; render(); } }
+function updPoll() {
+  clearTimeout(updTimer);
+  updTimer = setTimeout(async () => {
+    try {
+      const r = await call("hub_update_log", {}, 8000); updText = r.log;
+      const el = $("updOut"); if (el) { el.textContent = updText; el.scrollTop = el.scrollHeight; }
+      if (/Код завершення: \d+/.test(updText)) { upd = null; loadAdmin(); toast(/Код завершення: 0/.test(updText) ? "Хаб оновлено" : "Оновлення завершилось з помилкою — див. журнал"); return; }
+    } catch (e) { /* хаб перезапускається — чекаємо */ }
+    updPoll();
+  }, 3000);
+}
+
+// ---------------- консоль
+let conOut = null, conRoot = false, conHist = [];
+async function conInfo() { try { const r = await call("console_info"); if (r.rootAllowed !== conRoot) { conRoot = r.rootAllowed; if (view.tab === "set") softRender(); } } catch (e) { /* ок */ } }
+async function conRun() {
+  const cmd = $("conCmd").value.trim(); if (!cmd) return;
+  const root = $("conRootCb") && $("conRootCb").checked;
+  if (/\b(reboot|shutdown|poweroff|rm\s+-rf)\b/.test(cmd) && !confirm("Виконати «" + cmd + "»?")) return;
+  const btn = $("conBtn"); btn.disabled = true; btn.textContent = "Виконую…";
+  try {
+    const r = await call("console", { cmd, root }, 75000);
+    conRoot = r.rootAllowed;
+    conOut = `$ ${cmd}\n${r.out}${r.code ? "\n[код " + r.code + "]" : ""}`;
+  } catch (e) { conOut = `$ ${cmd}\n${e.message}`; }
+  conHist.push(cmd);
+  render();
+  const inp = $("conCmd"); if (inp) { inp.value = ""; inp.focus(); }
+  const o = $("conOut"); if (o) o.scrollTop = o.scrollHeight;
 }
 
 async function moveDev(i, dir) { const keys = admin.devices.map((d) => d.key), j = i + dir; if (j < 0 || j >= keys.length) return; [keys[i], keys[j]] = [keys[j], keys[i]]; if (await act(null, () => call("device_move", { keys }))) render(); }
