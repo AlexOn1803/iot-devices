@@ -151,6 +151,8 @@ async def main():
                 check("PIN змінено", a.get("ok") and json.load(open(d + "/config.json"))["pin"] == "654321")
 
                 # розклад на Pi: увімкнути реле плати цієї хвилини
+                if time.localtime().tm_sec > 40:      # щоб хвилина не змінилась, поки хаб перевірить розклад
+                    await asyncio.sleep(62 - time.localtime().tm_sec)
                 t = time.localtime()
                 a = await call("sched_set", schedules=[{"id": "s1", "deviceKey": esp_key, "hour": t.tm_hour, "minute": t.tm_min,
                                                         "days": 0, "turnOn": True, "enabled": True}])

@@ -320,9 +320,9 @@ void buildCompsLocked(JsonArrayConst arr) {
       case C_WS2812:
         c.count = constrain((int)(o["count"] | 8), 1, 600);
         c.bri = 128;
-        if (o["fxset"].is<JsonArray>()) {
+        if (o["fxset"].is<JsonArrayConst>()) {
           c.fxMask = 0;
-          for (const char* id : o["fxset"].as<JsonArray>()) { int j = fxIndex(id ? String(id) : String()); if (j >= 0) c.fxMask |= (1UL << j); }
+          for (const char* id : o["fxset"].as<JsonArrayConst>()) { int j = fxIndex(id ? String(id) : String()); if (j >= 0) c.fxMask |= (1UL << j); }
           if (!c.fxMask) c.fxMask = 1;   // хоча б «свій колір»
         }
         loadStrip(c, idx);
@@ -571,6 +571,7 @@ void toggleTuya(Comp& c) {
   setTuya(c, w >= 0 ? !w : !c.on);
 }
 
+void setRelay(Comp& c, bool on);
 void pulseRelay(Comp& c, uint32_t now) {
   setRelay(c, true);
   c.countdownEnd = now + max<uint32_t>(c.pulseMs, 50);   // після відліку реле само вимкнеться
