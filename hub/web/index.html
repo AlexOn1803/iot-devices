@@ -40,6 +40,9 @@
   .card { background: var(--card); border-radius: var(--radius); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
   .grid .card { min-height: 120px; }
   .card.on { outline: 2px solid color-mix(in srgb, var(--on) 55%, transparent); }
+  .card.bat { outline: 2px solid #ff5a5a; background: color-mix(in srgb, #ff5a5a 14%, var(--card)); }
+  .card.grid { outline: 2px solid #4f8cff; background: color-mix(in srgb, #4f8cff 12%, var(--card)); }
+  input[type=color] { width: 44px; height: 34px; padding: 2px; }
   .card h3 { margin: 0; font-size: 17px; font-weight: 600; }
   .stack { display: flex; flex-direction: column; gap: 14px; }
   .head { display: flex; align-items: center; gap: 10px; }
@@ -208,6 +211,12 @@ function invSummary(pts) {
     bv, batt, gridV, grid: gridV == null ? null : gridV > 100, mode };
 }
 const comps = (key) => ((states[key] || {}).state || {}).comps || [];
+const FX = [["none", "Свій колір"], ["breathe", "Дихання"], ["wipe", "Wipe"], ["confetti", "Confetti"], ["sinelon", "Sinelon"], ["juggle", "Juggle"], ["juggle2", "Juggle 2"],
+  ["plasma", "Plasma"], ["rainbow", "Rainbow"], ["glitter", "Rainbow Glitter"], ["snow", "Snow"], ["matrix", "Matrix Rain"], ["running", "Running Lights"], ["lava", "Lava"],
+  ["ocean", "Ocean"], ["aurora", "Aurora"], ["pacifica", "Pacifica"], ["theater", "Theater Chase"], ["theater_rainbow", "Theater Rainbow"], ["pride", "Pride"]];
+const fxName = (id) => (FX.find((f) => f[0] === id) || [id, id])[1];
+const hex2rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+const rgb2hex = (c) => "#" + (c || [255, 255, 255]).map((v) => Number(v).toString(16).padStart(2, "0")).join("");
 const OUT_TYPES = ["relay", "pwm", "ws2812", "tuya"], TEMP_TYPES = ["dht", "ds18b20", "aht", "bme", "sht21", "thermo"];
 
 // показники для умов правил (як у додатку)
@@ -337,7 +346,8 @@ function tileBody(key) {
     const cs = comps(key);
     for (const cp of cs) {
       const sw = OUT_TYPES.includes(cp.t); if (sw && cp.on) isOn = true;
-      body += `<div class="comp"><span class="label">${esc(cp.name)}</span><span>${esc(compVal(cp))}</span>${sw && !editing ? toggleBtn(key, cp.pending ?? cp.on, cp.i) : ""}</div>`;
+      const ctl = editing ? "" : cp.t === "relay" && cp.pulse ? `<button class="small primary" onclick="espCmd('${esc(key)}',${cp.i},{pulse:true})">Натиснути</button>` : sw ? toggleBtn(key, cp.pending ?? cp.on, cp.i) : "";
+      body += `<div class="comp"><span class="label">${esc(cp.name)}</span><span>${esc(compVal(cp))}</span>${ctl}</div>`;
     }
     if (!cs.length) body = `<div class="status">${online ? "Без компонентів" : ""}</div>`;
   }
@@ -351,7 +361,8 @@ function compVal(cp) {
   if (cp.pct != null) v += cp.pct + " % ";
   if (cp.t === "input" || cp.t === "button") v += cp.active ? "активний" : "спокій";
   if (cp.t === "thermo") v += cp.state === "on" ? "· гріє" : cp.state === "schedoff" ? "· за розкладом вимк." : "";
-  if (cp.cd > 0) v += " ⏱ " + Math.ceil(cp.cd / 60) + " хв";
+  if (cp.cd > 0) v += " ⏱ " + (cp.cd < 60 ? cp.cd + " с" : Math.ceil(cp.cd / 60) + " хв");
+  if (cp.t === "ws2812" && cp.on) v += fxName(cp.fx || "none") + (cp.auto ? " · авто" : "");
   return v;
 }
 function statusLine(key) {
@@ -368,6 +379,13 @@ function renderCard(key) {
   const pick = editing ? (tilePick === key ? pickerHtml(key) : `<div><button class="small" onclick="tilePick='${esc(key)}';renderCard('${esc(key)}')">Що показувати</button></div>`) : "";
   c.innerHTML = html + head + `</div>` + body + pick + statusLine(key);
   c.classList.toggle("on", !!isOn); c.style.opacity = editing && hidden ? 0.45 : 1;
+  // інвертор: червоний — працює від акумулятора, синій — від мережі
+  let invMode = null;
+  if (d.kind === "inv" && states[key] && states[key].online) {
+    const sm = invSummary(states[key].points || []);
+    invMode = sm.mode === "Від батареї" || (sm.grid === false && sm.mode !== "Очікування") ? "bat" : sm.mode === "Від мережі" || sm.grid ? "grid" : null;
+  }
+  c.classList.toggle("bat", invMode === "bat"); c.classList.toggle("grid", invMode === "grid");
 }
 
 // ---------------- сторінка пристрою
@@ -396,12 +414,24 @@ function espCmd(key, i, extra) { send({ t: "cmd", key, esp: Object.assign({ i },
 function espCompControl(key, c) {
   const k = esc(key);
   let ctl = "";
-  if (c.t === "relay" || c.t === "tuya") {
+  if (c.t === "relay" && c.pulse) {
+    ctl = `<button class="primary" onclick="espCmd('${k}',${c.i},{pulse:true})">Натиснути (${c.pulse} с)</button>`;
+  } else if (c.t === "relay" || c.t === "tuya") {
     ctl = toggleBtn(key, c.pending ?? c.on, c.i);
     if (c.t === "relay") ctl = `<span class="row" style="gap:4px">${[[300, "5 хв"], [1800, "30 хв"], [3600, "1 год"]].map(([s, l]) => `<button class="small" title="Увімкнути на ${l}" onclick="espCmd('${k}',${c.i},{cd:${s}})">${l}</button>`).join("")}${c.cd > 0 ? `<button class="small" onclick="espCmd('${k}',${c.i},{cd:0})">Скасувати таймер</button>` : ""}</span>` + ctl;
-  } else if (c.t === "pwm" || c.t === "ws2812") {
+  } else if (c.t === "pwm") {
     ctl = `<input type="range" min="1" max="255" value="${c.bri ?? 255}" onchange="espCmd('${k}',${c.i},{bri:Number(this.value)})">` + toggleBtn(key, c.on, c.i);
-    if (c.t === "ws2812") ctl = `<span class="row" style="gap:4px">${[[255, 255, 255], [255, 140, 40], [255, 0, 0], [0, 200, 0], [0, 80, 255], [180, 0, 255]].map((rgb) => `<button class="small" style="background:rgb(${rgb})" title="колір" onclick="espCmd('${k}',${c.i},{rgb:[${rgb}],fx:'none'})">&nbsp;</button>`).join("")}<select onchange="espCmd('${k}',${c.i},{fx:this.value})">${[["none", "Статично"], ["breathe", "Дихання"], ["rainbow", "Веселка"]].map(([v, l]) => `<option value="${v}" ${(c.fx || "none") === v ? "selected" : ""}>${l}</option>`).join("")}</select></span>` + ctl;
+  } else if (c.t === "ws2812") {
+    const list = c.fxs && c.fxs.length ? c.fxs : FX.map((f) => f[0]);
+    ctl = `<div class="stack" style="gap:8px;flex-basis:100%">
+      <div class="row" style="align-items:center"><button class="small" onclick="espCmd('${k}',${c.i},{prev:true})">⟵</button>
+        <select style="flex:1" onchange="espCmd('${k}',${c.i},{fx:this.value})">${list.map((id) => `<option value="${id}" ${(c.fx || "none") === id ? "selected" : ""}>${esc(fxName(id))}</option>`).join("")}</select>
+        <button class="small" onclick="espCmd('${k}',${c.i},{next:true})">⟶</button>${toggleBtn(key, c.on, c.i)}</div>
+      <div class="row" style="align-items:center;gap:6px">${[[255, 255, 255], [255, 147, 42], [255, 0, 0], [255, 80, 0], [255, 200, 0], [0, 255, 0], [0, 255, 255], [0, 0, 255], [150, 0, 255], [255, 20, 120]].map((rgb) => `<button class="small" style="background:rgb(${rgb});width:30px;height:30px;padding:0" title="один колір" onclick="espCmd('${k}',${c.i},{rgb:[${rgb}],fx:'none'})"></button>`).join("")}
+        <input type="color" value="${rgb2hex(c.rgb)}" title="свій колір" onchange="espCmd('${k}',${c.i},{rgb:hex2rgb(this.value),fx:'none'})"></div>
+      <div class="row"><label class="f">Яскравість<input type="range" min="1" max="255" value="${c.bri ?? 128}" onchange="espCmd('${k}',${c.i},{bri:Number(this.value)})"></label>
+        <label class="f">Швидкість ${c.speed ?? 5}<input type="range" min="1" max="10" value="${c.speed ?? 5}" onchange="espCmd('${k}',${c.i},{speed:Number(this.value)})"></label>
+        <label class="f" style="max-width:170px">Автоперемикання<select onchange="espCmd('${k}',${c.i},{auto:Number(this.value)})">${[[0, "вимкнено"], [10, "кожні 10 с"], [15, "кожні 15 с"], [30, "кожні 30 с"], [60, "щохвилини"], [300, "кожні 5 хв"], [900, "кожні 15 хв"]].map(([v, l]) => `<option value="${v}" ${(c.auto || 0) === v ? "selected" : ""}>${l}</option>`).join("")}${c.auto && ![0, 10, 15, 30, 60, 300, 900].includes(c.auto) ? `<option selected value="${c.auto}">кожні ${c.auto} с</option>` : ""}</select></label></div></div>`;
   } else if (c.t === "thermo") {
     ctl = `<label class="c"><input type="checkbox" ${c.enabled ? "checked" : ""} onchange="espCmd('${k}',${c.i},{enabled:this.checked})"> працює</label>
       <label class="f" style="max-width:110px">${c.mode === "cool" ? "увімк. від" : "увімк. до"}<input type="number" step="0.5" value="${c.onAt ?? ""}" onchange="espCmd('${k}',${c.i},{onAt:Number(this.value)})"></label>
@@ -471,6 +501,7 @@ async function ota(key, btn) {
   if (r) setTimeout(() => { espCfg = null; espInfo = null; if (view.key === key) render(); }, 15000); else render();
 }
 function setC(i, f, v) { espCfg.comps[i][f] = v; }
+function setFx(i, id, on) { const c = espCfg.comps[i]; const l = new Set(c.fxset && c.fxset.length ? c.fxset : FX.map((x) => x[0])); on ? l.add(id) : l.delete(id); c.fxset = FX.map((x) => x[0]).filter((x) => l.has(x)); }
 function addComp() {
   const t = $("newType").value, base = { t, name: typeLabel(t) };
   const pins = { relay: { pin: -1, inv: false, po: "off" }, button: { pin: -1, inv: true, pull: true, target: 0 }, pwm: { pin: -1, inv: false }, ws2812: { pin: -1, count: 30 },
@@ -486,10 +517,14 @@ function compEditor(c, i, all) {
   const compSel = (f, l, filter) => `<label class="f">${l}<select onchange="setC(${i},'${f}',Number(this.value))"><option value="-1">—</option>${all.map((x, j) => filter(x) && j !== i ? `<option value="${j}" ${c[f] === j ? "selected" : ""}>${esc(x.name)}</option>` : "").join("")}</select></label>`;
   let f = "";
   switch (c.t) {
-    case "relay": f = inp("pin", "Пін") + chk("inv", "інвертований") + `<label class="f">Після подачі живлення<select onchange="setC(${i},'po',this.value)">${[["off", "вимкнено"], ["on", "увімкнено"], ["memory", "як було"]].map(([v, l]) => `<option value="${v}" ${c.po === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>`; break;
+    case "relay": f = inp("pin", "Пін") + chk("inv", "інвертований") + inp("pulse", "Кнопка: увімкнути на N с (0 — звичайне реле)", "number", 'step="0.1" min="0"') + `<label class="f">Після подачі живлення<select onchange="setC(${i},'po',this.value)">${[["off", "вимкнено"], ["on", "увімкнено"], ["memory", "як було"]].map(([v, l]) => `<option value="${v}" ${c.po === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>`; break;
     case "button": f = inp("pin", "Пін") + chk("inv", "активний низький") + chk("pull", "підтяжка") + compSel("target", "Що перемикає", (x) => ["relay", "tuya", "pwm", "ws2812"].includes(x.t)); break;
     case "pwm": f = inp("pin", "Пін") + chk("inv", "інвертований"); break;
-    case "ws2812": f = inp("pin", "Пін") + inp("count", "Світлодіодів"); break;
+    case "ws2812": {
+      const on = c.fxset && c.fxset.length ? c.fxset : FX.map((x) => x[0]);
+      f = inp("pin", "Пін") + inp("count", "Світлодіодів") + `<div style="flex-basis:100%"><div class="muted">Які ефекти показувати й перебирати в автоперемиканні:</div><div class="row" style="gap:6px 14px">${FX.map(([id, l]) => `<label class="c"><input type="checkbox" ${on.includes(id) ? "checked" : ""} onchange="setFx(${i},'${id}',this.checked)"> ${esc(l)}</label>`).join("")}</div></div>`;
+      break;
+    }
     case "dht": f = inp("pin", "Пін") + `<label class="f">Модель<select onchange="setC(${i},'model',Number(this.value))"><option value="11" ${c.model === 11 ? "selected" : ""}>DHT11</option><option value="22" ${c.model !== 11 ? "selected" : ""}>DHT22</option></select></label>`; break;
     case "ds18b20": f = inp("pin", "Пін"); break;
     case "aht": case "bme": case "sht21": f = inp("sda", "SDA") + inp("scl", "SCL"); break;

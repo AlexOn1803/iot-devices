@@ -2,6 +2,8 @@
 
 package ua.madeisy.iot.ui
 
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -139,9 +141,19 @@ fun SmartEssCard(snackbar: SnackbarHostState) {
 @Composable
 fun InverterCard(d: EssDevice, s: InverterState, onClick: () -> Unit) {
     val sum = s.summary
+    // червоний — працює від акумулятора, синій — від мережі
+    val modeUa = sum.mode?.let { EssSummary.modeUa(it) }
+    val accent = when {
+        s.points.isEmpty() -> null
+        modeUa == "Від батареї" || (sum.gridPresent == false && modeUa != "Очікування") -> androidx.compose.ui.graphics.Color(0xFFE5484D)
+        modeUa == "Від мережі" || sum.gridPresent == true -> androidx.compose.ui.graphics.Color(0xFF3E7BFA)
+        else -> null
+    }
     Card(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)
+            .then(if (accent != null) Modifier.border(2.dp, accent, MaterialTheme.shapes.medium) else Modifier),
+        colors = CardDefaults.cardColors(containerColor = accent?.copy(alpha = 0.12f)?.compositeOver(MaterialTheme.colorScheme.surfaceContainerLow)
+            ?: MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
         Column(Modifier.padding(16.dp)) {
             Text(d.alias, style = MaterialTheme.typography.titleMedium)

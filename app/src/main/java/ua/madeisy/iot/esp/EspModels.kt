@@ -63,14 +63,18 @@ data class EspCompConfig(
     val tuyaDp: Int = 1,
     /** Розклад термостата на платі. */
     val sched: List<SchedPeriod> = emptyList(),
+    /** Реле-«кнопка»: увімкнути на стільки секунд і вимкнути (0 — звичайне реле). */
+    val pulse: Double = 0.0,
+    /** Стрічка: які ефекти показувати й перебирати (порожньо — усі). */
+    val fxset: List<String> = emptyList(),
 ) {
     fun toJson(): JSONObject {
         val o = JSONObject().put("t", type.code).put("name", name)
         when (type) {
-            EspType.RELAY -> o.put("pin", pin).put("inv", inv).put("po", powerOn)
+            EspType.RELAY -> o.put("pin", pin).put("inv", inv).put("po", powerOn).apply { if (pulse > 0) put("pulse", pulse) }
             EspType.BUTTON -> o.put("pin", pin).put("inv", inv).put("pull", pull).put("target", target)
             EspType.PWM -> o.put("pin", pin).put("inv", inv)
-            EspType.WS2812 -> o.put("pin", pin).put("count", count)
+            EspType.WS2812 -> o.put("pin", pin).put("count", count).apply { if (fxset.isNotEmpty()) put("fxset", JSONArray(fxset)) }
             EspType.DHT -> o.put("pin", pin).put("model", model)
             EspType.DS18B20 -> o.put("pin", pin)
             EspType.AHT, EspType.BME, EspType.SHT21 -> o.put("sda", sda).put("scl", scl)
@@ -111,6 +115,8 @@ data class EspCompConfig(
                 tuyaIp = o.optString("ip"), tuyaVer = o.optString("ver", "3.3"), tuyaDp = o.optInt("dp", 1),
                 sched = o.optJSONArray("sched")?.let { a -> (0 until a.length()).mapNotNull { a.optJSONObject(it)?.let(SchedPeriod::fromJson) } }
                     ?: emptyList(),
+                pulse = o.optDouble("pulse", 0.0).takeIf { !it.isNaN() } ?: 0.0,
+                fxset = o.optJSONArray("fxset")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList(),
             )
         }
 
@@ -211,6 +217,12 @@ data class EspComp(
     val error: String? = null,
     val pending: Boolean? = null,
     val sched: SchedState? = null,
+    /** Стрічка: швидкість 1…10, автоперемикання (с), дозволені ефекти. */
+    val speed: Int? = null,
+    val autoSec: Int = 0,
+    val fxs: List<String> = emptyList(),
+    /** Реле-«кнопка»: тривалість імпульсу, с. */
+    val pulse: Double? = null,
 ) {
     val isSwitchable: Boolean get() = type == EspType.RELAY || type == EspType.PWM || type == EspType.WS2812 || type == EspType.TUYA
 
@@ -227,6 +239,9 @@ data class EspComp(
                 i = o.optInt("i"), type = EspType.parse(o.optString("t")), name = o.optString("name"),
                 on = o.optBoolOrNull("on"), countdown = o.optInt("cd", 0), bri = o.optIntOrNull("bri"),
                 rgb = rgb, fx = o.optString("fx").ifEmpty { null },
+                speed = o.optIntOrNull("speed"), autoSec = o.optInt("auto", 0),
+                fxs = o.optJSONArray("fxs")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList(),
+                pulse = o.optDoubleOrNull("pulse"),
                 temp = o.optDoubleOrNull("temp"), hum = o.optDoubleOrNull("hum"),
                 raw = o.optIntOrNull("raw"), pct = o.optIntOrNull("pct"), active = o.optBoolOrNull("active"),
                 enabled = o.optBoolOrNull("enabled"), heat = o.optString("mode", "heat") != "cool",
@@ -347,3 +362,12 @@ data class SchedState(
         }
     }
 }
+
+
+/** Ефекти стрічки WS2812 (як у прошивці, effects.h). */
+val STRIP_FX = listOf(
+    "none" to "Свій колір", "breathe" to "Дихання", "wipe" to "Wipe", "confetti" to "Confetti", "sinelon" to "Sinelon",
+    "juggle" to "Juggle", "juggle2" to "Juggle 2", "plasma" to "Plasma", "rainbow" to "Rainbow", "glitter" to "Rainbow Glitter",
+    "snow" to "Snow", "matrix" to "Matrix Rain", "running" to "Running Lights", "lava" to "Lava", "ocean" to "Ocean",
+    "aurora" to "Aurora", "pacifica" to "Pacifica", "theater" to "Theater Chase", "theater_rainbow" to "Theater Rainbow", "pride" to "Pride",
+)

@@ -9,6 +9,7 @@
 #include <DNSServer.h>
 #include <Wire.h>
 #include <Adafruit_NeoPixel.h>
+#include "effects.h"
 #include <DHT.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
@@ -107,8 +108,15 @@ struct Comp {
   uint32_t countdownEnd = 0;    // millis(), 0 — немає
   int bri = 255;
   uint8_t r = 255, g = 255, b = 255;
-  String fx = "none";           // none | rainbow | breathe
+  String fx = "none";           // ефект стрічки: id з FX_LIST (effects.h); none — свій колір
   int count = 0;
+  int speed = 5;                // швидкість анімації 1…10
+  int autoSec = 0;              // автоперемикання ефектів кожні N с (0 — вимк.)
+  uint32_t lastAuto = 0;
+  uint32_t fxMask = 0xFFFFFFFF; // які ефекти показувати й перебирати (біт = номер у FX_LIST)
+  uint32_t saveAt = 0;          // зберегти стан стрічки (на випадок вимкнення живлення)
+  FxState fxs;
+  uint32_t pulseMs = 0;         // реле-«кнопка»: увімкнути на стільки мс і вимкнути
   int ledcCh = -1;
   Adafruit_NeoPixel* strip = nullptr;
   // кнопка
@@ -203,24 +211,58 @@ void applyStrip(Comp& c, uint32_t now = 0) {
   if (!c.strip) return;
   if (!c.on) {
     c.strip->clear();
-  } else if (c.fx == "rainbow") {
-    uint8_t base = (now / 20) & 0xFF;
-    for (int i = 0; i < c.count; i++) c.strip->setPixelColor(i, wheel(base + i * 256 / max(1, c.count)));
   } else {
-    float k = 1.0f;
-    if (c.fx == "breathe") k = 0.15f + 0.85f * (0.5f + 0.5f * sinf(now / 600.0f));
-    uint32_t col = Adafruit_NeoPixel::Color(c.r * k, c.g * k, c.b * k);
-    for (int i = 0; i < c.count; i++) c.strip->setPixelColor(i, col);
+    if (!c.fxs.leds) c.fxs.alloc(c.count);
+    fxFrame(c.fxs, fxIndex(c.fx), CRGB(c.r, c.g, c.b), c.speed, now ? now : millis());
+    for (int i = 0; i < c.count && i < c.fxs.n; i++) c.strip->setPixelColor(i, c.fxs.leds[i].r, c.fxs.leds[i].g, c.fxs.leds[i].b);
   }
   c.strip->setBrightness(c.bri);
   c.strip->show();
+  c.fxs.lastFrame = now ? now : millis();
 }
+
+/** Стан стрічки зберігається на платі — після вимкнення живлення вмикається як було. */
+void saveStrip(Comp& c, size_t idx) {
+  JsonDocument d;
+  d["on"] = c.on; d["bri"] = c.bri; d["fx"] = c.fx; d["sp"] = c.speed; d["au"] = c.autoSec;
+  d["c"] = ((uint32_t)c.r << 16) | ((uint32_t)c.g << 8) | c.b;
+  String out; serializeJson(d, out);
+  char k[8]; snprintf(k, sizeof(k), "ws%u", (unsigned)idx);
+  if (prefs.getString(k, "") != out) prefs.putString(k, out);
+}
+
+void loadStrip(Comp& c, size_t idx) {
+  char k[8]; snprintf(k, sizeof(k), "ws%u", (unsigned)idx);
+  String v = prefs.getString(k, "");
+  if (!v.length()) return;
+  JsonDocument d;
+  if (deserializeJson(d, v)) return;
+  c.on = d["on"] | false; c.bri = d["bri"] | 128; c.fx = (const char*)(d["fx"] | "none");
+  if (fxIndex(c.fx) < 0) c.fx = "none";
+  c.speed = constrain((int)(d["sp"] | 5), 1, 10); c.autoSec = d["au"] | 0;
+  uint32_t col = d["c"] | 0xFFFFFFu;
+  c.r = col >> 16; c.g = col >> 8; c.b = col;
+}
+
+/** Наступний дозволений ефект (для автоперемикання й кнопок ⟵ ⟶). */
+String nextFx(const Comp& c, int dir) {
+  int cur = fxIndex(c.fx);
+  for (int k = 1; k <= FX_COUNT; k++) {
+    int j = ((cur < 0 ? 0 : cur) + dir * k + FX_COUNT * 4) % FX_COUNT;
+    if (c.fxMask & (1UL << j)) return FX_LIST[j].id;
+  }
+  return c.fx;
+}
+
+/** Реле-«кнопка»: увімкнути на pulseMs і вимкнути (напр., кнопка живлення ПК). */
+void pulseRelay(Comp& c, uint32_t now);
 
 uint32_t compsGen = 0;   // змінюється при кожній перебудові — фонова задача так бачить застарілі результати
 
 void freeComps() {
   for (auto& c : comps) {
     if (c.strip) { c.strip->clear(); c.strip->show(); delete c.strip; }
+    c.fxs.free();
     delete c.dht; delete c.ds; delete c.ow; delete c.aht; delete c.bme; delete c.bmp;
     if (c.type == C_PWM && c.ledcCh >= 0 && validPin(c.pin)) pwmDetach(c.pin);
   }
@@ -259,6 +301,8 @@ void buildCompsLocked(JsonArrayConst arr) {
     switch (c.type) {
       case C_RELAY:
         c.powerOn = o["po"] | "off";
+        c.pulseMs = (uint32_t)((float)(o["pulse"] | 0.0f) * 1000.0f);
+        if (c.pulseMs) c.powerOn = "off";   // «кнопка» після подачі живлення завжди відпущена
         if (validPin(c.pin)) pinMode(c.pin, OUTPUT);
         c.on = c.powerOn == "on" || (c.powerOn == "memory" && idx < 32 && (relayMask & (1UL << idx)));
         applyRelay(c);
@@ -276,6 +320,13 @@ void buildCompsLocked(JsonArrayConst arr) {
       case C_WS2812:
         c.count = constrain((int)(o["count"] | 8), 1, 600);
         c.bri = 128;
+        if (o["fxset"].is<JsonArray>()) {
+          c.fxMask = 0;
+          for (const char* id : o["fxset"].as<JsonArray>()) { int j = fxIndex(id ? String(id) : String()); if (j >= 0) c.fxMask |= (1UL << j); }
+          if (!c.fxMask) c.fxMask = 1;   // хоча б «свій колір»
+        }
+        loadStrip(c, idx);
+        c.fxs.alloc(c.count);
         if (validPin(c.pin)) {
           c.strip = new Adafruit_NeoPixel(c.count, c.pin, NEO_GRB + NEO_KHZ800);
           c.strip->begin();
@@ -520,6 +571,11 @@ void toggleTuya(Comp& c) {
   setTuya(c, w >= 0 ? !w : !c.on);
 }
 
+void pulseRelay(Comp& c, uint32_t now) {
+  setRelay(c, true);
+  c.countdownEnd = now + max<uint32_t>(c.pulseMs, 50);   // після відліку реле само вимкнеться
+}
+
 void setRelay(Comp& c, bool on) {
   if (c.type == C_TUYA) { setTuya(c, on); return; }
   c.on = on;
@@ -628,10 +684,11 @@ void handleButtons(uint32_t now) {
       if (c.inv) pressed = !pressed;
       if (pressed && c.target >= 0 && c.target < (int)comps.size()) {
         Comp& t = comps[c.target];
-        if (t.type == C_RELAY) setRelay(t, !t.on);
+        if (t.type == C_RELAY && t.pulseMs) pulseRelay(t, now);
+        else if (t.type == C_RELAY) setRelay(t, !t.on);
         else if (t.type == C_TUYA) toggleTuya(t);
         else if (t.type == C_PWM) { t.on = !t.on; applyPwm(t); }
-        else if (t.type == C_WS2812) { t.on = !t.on; applyStrip(t, now); }
+        else if (t.type == C_WS2812) { t.on = !t.on; t.saveAt = now + 2000; applyStrip(t, now); }
       }
     }
   }
@@ -658,6 +715,7 @@ String stateJson(bool diag = true) {
       case C_RELAY:
         o["on"] = c.on;
         o["cd"] = c.countdownEnd ? (int)((c.countdownEnd - now) / 1000) : 0;
+        if (c.pulseMs) o["pulse"] = c.pulseMs / 1000.0f;
         break;
       case C_PWM:
         o["on"] = c.on; o["bri"] = c.bri;
@@ -666,6 +724,9 @@ String stateJson(bool diag = true) {
         o["on"] = c.on; o["bri"] = c.bri; o["fx"] = c.fx;
         JsonArray rgb = o["rgb"].to<JsonArray>();
         rgb.add(c.r); rgb.add(c.g); rgb.add(c.b);
+        o["speed"] = c.speed; o["auto"] = c.autoSec;
+        JsonArray fl = o["fxs"].to<JsonArray>();   // ефекти, які показувати в панелі/додатку
+        for (int j = 0; j < FX_COUNT; j++) if (c.fxMask & (1UL << j)) fl.add(FX_LIST[j].id);
         break;
       }
       case C_DHT: case C_AHT: case C_SHT21:
@@ -797,9 +858,15 @@ void applyCommands(JsonVariant doc) {
     Comp& c = comps[i];
     bool hasOn = o["on"].is<bool>();
     bool toggle = o["toggle"] | false;
-    if (c.type == C_RELAY) {
+    if (c.type == C_RELAY && c.pulseMs && ((hasOn && o["on"]) || toggle || (o["pulse"] | false))) {
+      pulseRelay(c, now);
+    } else if (c.type == C_RELAY) {
       if (hasOn) setRelay(c, o["on"]);
       if (toggle) setRelay(c, !c.on);
+      if (o["pulse"].is<float>() && (float)o["pulse"] > 0) {   // разове «увімкнути на N с»
+        setRelay(c, true);
+        c.countdownEnd = now + (uint32_t)((float)o["pulse"] * 1000);
+      }
       if (o["cd"].is<int>()) {
         int sec = o["cd"];
         c.countdownEnd = sec > 0 ? now + (uint32_t)sec * 1000 : 0;
@@ -813,8 +880,12 @@ void applyCommands(JsonVariant doc) {
         c.r = rgb[0] | 0; c.g = rgb[1] | 0; c.b = rgb[2] | 0;
         if (!hasOn) c.on = true;
       }
-      if (o["fx"].is<const char*>()) c.fx = (const char*)o["fx"];
-      if (c.type == C_PWM) applyPwm(c); else applyStrip(c, now);
+      if (o["fx"].is<const char*>() && fxIndex((const char*)o["fx"]) >= 0) { c.fx = (const char*)o["fx"]; if (!hasOn) c.on = true; c.lastAuto = now; }
+      if (o["next"] | false) { c.fx = nextFx(c, 1); c.on = true; c.lastAuto = now; }
+      if (o["prev"] | false) { c.fx = nextFx(c, -1); c.on = true; c.lastAuto = now; }
+      if (o["speed"].is<int>()) c.speed = constrain((int)o["speed"], 1, 10);
+      if (o["auto"].is<int>()) { c.autoSec = max(0, (int)o["auto"]); c.lastAuto = now; }
+      if (c.type == C_PWM) applyPwm(c); else { c.saveAt = now + 2000; applyStrip(c, now); }
     } else if (c.type == C_TUYA) {
       if (hasOn) setTuya(c, o["on"]);
       if (toggle) toggleTuya(c);
@@ -966,7 +1037,7 @@ String switchSignature() {
     s += (char)('0' + (c.tWant + 1));
     s += c.tOnline ? '1' : '0';
     if (c.type == C_THERMO) { s += c.thermoState; s += String(c.effOn, 1); s += String(c.effOff, 1); s += c.holdKey >= 0 ? 'h' : '-'; }
-    if (c.type == C_PWM || c.type == C_WS2812) { s += String(c.bri); s += String(c.r) + String(c.g) + String(c.b); s += c.fx; }
+    if (c.type == C_PWM || c.type == C_WS2812) { s += String(c.bri); s += String(c.r) + String(c.g) + String(c.b); s += c.fx; s += String(c.speed); s += String(c.autoSec); }
     s += c.countdownEnd ? 'c' : '-';
     s += '|';
   }
@@ -1563,9 +1634,14 @@ void loop() {
     if (c.type == C_RELAY && c.countdownEnd && (int32_t)(now - c.countdownEnd) >= 0) {
       setRelay(c, !c.on);
     }
-    if (c.type == C_WS2812 && c.on && c.fx != "none") {
-      static uint32_t lastFx = 0;
-      if (now - lastFx > 30) { lastFx = now; applyStrip(c, now); }
+    if (c.type == C_WS2812) {
+      if (c.on && c.autoSec > 0 && now - c.lastAuto >= (uint32_t)c.autoSec * 1000) {
+        c.lastAuto = now;
+        c.fx = nextFx(c, 1);
+        c.saveAt = now + 2000;
+      }
+      if (c.on && c.fx != "none" && now - c.fxs.lastFrame >= fxDelay(c.speed)) applyStrip(c, now);
+      if (c.saveAt && (int32_t)(now - c.saveAt) >= 0) { c.saveAt = 0; saveStrip(c, &c - &comps[0]); }
     }
   }
 

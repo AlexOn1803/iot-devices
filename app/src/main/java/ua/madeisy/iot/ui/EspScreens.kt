@@ -96,6 +96,7 @@ import ua.madeisy.iot.esp.EspDiscovery
 import ua.madeisy.iot.esp.EspFound
 import ua.madeisy.iot.esp.EspState
 import ua.madeisy.iot.esp.EspType
+import ua.madeisy.iot.esp.STRIP_FX
 import java.util.Locale
 
 private val FIRMWARE_URL = "https://github.com/AlexOn1803/iot-devices/releases/tag/" + ua.madeisy.iot.BuildConfig.RELEASE_TAG
@@ -193,7 +194,17 @@ private fun EspStatusLine(cfg: DeviceConfig, s: EspState) {
 @Composable
 private fun EspCompCard(c: EspComp, s: EspState, send: (JSONObject) -> Unit) {
     when (c.type) {
-        EspType.RELAY -> SectionCard {
+        EspType.RELAY -> if (c.pulse != null && c.pulse > 0) SectionCard {
+            // реле-«кнопка»: натиснули — увімкнулось на N с і вимкнулось (напр., кнопка живлення ПК)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(c.name, style = MaterialTheme.typography.titleMedium)
+                    Text(if (c.on == true) "Натиснуто…" else "Кнопка · ${c.pulse} с", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Button(onClick = { send(JSONObject().put("pulse", true)) }) { Text("Натиснути") }
+            }
+        } else SectionCard {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(c.name, style = MaterialTheme.typography.titleMedium)
@@ -247,11 +258,26 @@ private fun EspCompCard(c: EspComp, s: EspState, send: (JSONObject) -> Unit) {
                     }
                 }
                 Spacer(Modifier.height(8.dp))
-                val fx = listOf("none" to "Статично", "breathe" to "Дихання", "rainbow" to "Веселка")
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    fx.forEachIndexed { i, (v, l) ->
-                        SegmentedButton(selected = (c.fx ?: "none") == v, onClick = { send(JSONObject().put("fx", v)) },
-                            shape = SegmentedButtonDefaults.itemShape(i, fx.size)) { Text(l) }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Ефект: " + (STRIP_FX.firstOrNull { it.first == (c.fx ?: "none") }?.second ?: c.fx ?: ""),
+                        style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { send(JSONObject().put("prev", true)) }) { Text("⟵") }
+                    TextButton(onClick = { send(JSONObject().put("next", true)) }) { Text("⟶") }
+                }
+                val allowed = if (c.fxs.isNotEmpty()) STRIP_FX.filter { it.first in c.fxs } else STRIP_FX
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    allowed.forEach { (v, l) ->
+                        FilterChip(selected = (c.fx ?: "none") == v, onClick = { send(JSONObject().put("fx", v)) }, label = { Text(l) })
+                    }
+                }
+                var sp by remember(c.speed) { mutableFloatStateOf((c.speed ?: 5).toFloat()) }
+                Text("Швидкість ${sp.toInt()}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Slider(value = sp, onValueChange = { sp = it }, valueRange = 1f..10f, steps = 8,
+                    onValueChangeFinished = { send(JSONObject().put("speed", sp.toInt())) })
+                Text("Автоперемикання ефектів", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(0 to "Вимк.", 15 to "15 с", 30 to "30 с", 60 to "1 хв", 300 to "5 хв").forEach { (sec, l) ->
+                        FilterChip(selected = c.autoSec == sec, onClick = { send(JSONObject().put("auto", sec)) }, label = { Text(l) })
                     }
                 }
             }
@@ -805,6 +831,15 @@ private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompC
                 when (c.type) {
                     EspType.RELAY -> {
                         CheckRow("Інвертувати (реле вмикається низьким рівнем)", c.inv) { c = c.copy(inv = it) }
+                        CheckRow("Кнопка: натиснув — увімкнулось на кілька секунд і вимкнулось", c.pulse > 0) {
+                            c = c.copy(pulse = if (it) 0.5 else 0.0)
+                        }
+                        if (c.pulse > 0) {
+                            var ps by remember(c.pulse) { mutableStateOf(c.pulse.toString()) }
+                            OutlinedTextField(ps, { v -> ps = v.replace(',', '.').filter { it.isDigit() || it == '.' }.take(6)
+                                ps.toDoubleOrNull()?.takeIf { it > 0 }?.let { c = c.copy(pulse = it) } },
+                                label = { Text("Скільки тримати, с (напр. 0.5)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                        }
                         Text("Після подачі живлення", style = MaterialTheme.typography.labelLarge)
                         val opts = listOf("off" to "Вимк.", "on" to "Увімк.", "memory" to "Як було")
                         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
@@ -827,7 +862,19 @@ private fun EspCompDialog(initial: EspCompConfig, index: Int, all: List<EspCompC
                         CheckRow("Підтяжка до 3.3 В (кнопка замикає на GND)", c.pull) { c = c.copy(pull = it) }
                     }
                     EspType.PWM -> CheckRow("Інвертувати (світлодіод на платі)", c.inv) { c = c.copy(inv = it) }
-                    EspType.WS2812 -> NumField("Кількість світлодіодів", c.count) { c = c.copy(count = it.coerceIn(1, 600)) }
+                    EspType.WS2812 -> {
+                        NumField("Кількість світлодіодів", c.count) { c = c.copy(count = it.coerceIn(1, 600)) }
+                        Text("Які ефекти показувати й перебирати", style = MaterialTheme.typography.labelLarge)
+                        val cur = if (c.fxset.isEmpty()) STRIP_FX.map { it.first } else c.fxset
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            STRIP_FX.forEach { (id, l) ->
+                                FilterChip(selected = id in cur, onClick = {
+                                    val n = if (id in cur) cur - id else cur + id
+                                    c = c.copy(fxset = STRIP_FX.map { it.first }.filter { it in n }.ifEmpty { listOf("none") })
+                                }, label = { Text(l) })
+                            }
+                        }
+                    }
                     EspType.DHT -> {
                         val m = listOf(11, 22)
                         SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {

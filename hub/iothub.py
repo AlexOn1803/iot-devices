@@ -656,6 +656,8 @@ class Hub:
             c = next((c for c in comps if c.get("t") in ("relay", "pwm", "ws2812", "tuya")), None)
         else:
             c = next((c for c in comps if c.get("i") == comp), None)
+        if (c or {}).get("pulse"):
+            return None      # реле-«кнопка» (імпульс) — стан не тримаємо, інакше правило натискало б її знову й знову
         v = (c or {}).get("on")
         return v if isinstance(v, bool) else None
 
