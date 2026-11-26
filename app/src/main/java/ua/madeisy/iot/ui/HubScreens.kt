@@ -1,6 +1,7 @@
 package ua.madeisy.iot.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -64,6 +65,7 @@ fun HubCard(snackbar: SnackbarHostState) {
                 OutlinedButton(enabled = !busy && s.lanHost.isNotBlank(), onClick = { pair(s.lanHost) }) { Text("Підключити заново") }
                 TextButton(onClick = { hub.forget() }) { Text("Від'єднати") }
             }
+            HubUpdateSection(snackbar)
         } else {
             Text(
                 "Raspberry Pi як домашній сервер: миттєвий стан розеток, плат і інвертора вдома й поза домом. " +
@@ -112,6 +114,98 @@ private fun SelectionContainerText(text: String) {
     androidx.compose.foundation.text.selection.SelectionContainer {
         Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = MaterialTheme.shapes.small, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
             Text(text, style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace), modifier = Modifier.padding(8.dp))
+        }
+    }
+}
+
+
+/** Оновлення хаба на Raspberry Pi: перевірити нову версію на GitHub і встановити (як у веб-панелі). */
+@Composable
+private fun HubUpdateSection(snackbar: SnackbarHostState) {
+    val hub = IotApp.instance.controller.hub
+    val status by hub.status.collectAsState()
+    val scope = rememberCoroutineScope()
+    var info by remember { mutableStateOf<org.json.JSONObject?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var log by remember { mutableStateOf<String?>(null) }
+    var polling by remember { mutableStateOf(false) }
+
+    // поки йде оновлення — читаємо журнал; хаб перезапускається, тож помилки зв'язку пропускаємо
+    LaunchedEffect(polling) {
+        while (polling) {
+            kotlinx.coroutines.delay(3000)
+            hub.request(org.json.JSONObject().put("t", "hub_update_log"), 8000).onSuccess { j ->
+                log = j.optString("log")
+                val m = Regex("Код завершення: (\\d+)").find(log ?: "")
+                if (m != null) {
+                    polling = false
+                    info = null
+                    snackbar.showSnackbar(if (m.groupValues[1] == "0") "Хаб оновлено" else "Оновлення завершилось з помилкою — див. журнал")
+                }
+            }
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+    HorizontalDivider()
+    Spacer(Modifier.height(8.dp))
+    Text("Оновлення хаба", style = MaterialTheme.typography.titleSmall)
+    Text("Pi сама завантажить нову версію з GitHub і перевстановиться; налаштування зберігаються. " +
+        "Зв'язок з хабом пропаде приблизно на хвилину.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Spacer(Modifier.height(6.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+        OutlinedButton(enabled = !busy && !polling && status.connected, onClick = {
+            busy = true
+            scope.launch {
+                hub.request(org.json.JSONObject().put("t", "hub_update_check"), 30_000)
+                    .onSuccess { info = it }
+                    .onFailure { snackbar.showSnackbar(it.message ?: "Не вдалося перевірити") }
+                busy = false
+            }
+        }) { Text(if (busy && !polling) "Перевіряю…" else "Перевірити") }
+        val i = info
+        if (i != null && !i.optBoolean("upToDate")) {
+            Button(enabled = !busy && !polling, onClick = {
+                busy = true
+                scope.launch {
+                    hub.request(org.json.JSONObject().put("t", "hub_update").put("sha", i.optString("latest")), 15_000)
+                        .onSuccess { log = "Оновлення запущено…"; polling = true }
+                        .onFailure { snackbar.showSnackbar(it.message ?: "Не вдалося запустити оновлення") }
+                    busy = false
+                }
+            }) { Text("Оновити") }
+        }
+        TextButton(enabled = status.connected && !polling, onClick = {
+            scope.launch {
+                hub.request(org.json.JSONObject().put("t", "hub_update_log"), 8000)
+                    .onSuccess { log = it.optString("log").ifBlank { "(журнал порожній)" } }
+                    .onFailure { snackbar.showSnackbar(it.message ?: "Помилка") }
+            }
+        }) { Text("Журнал") }
+    }
+    if (!status.connected) Text("Потрібен зв'язок з хабом", style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.error)
+    info?.let { i ->
+        val inst = i.optJSONObject("installed") ?: org.json.JSONObject()
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Встановлено: ${inst.optString("sha", "?").take(7)} (${inst.optString("branch", "?")})  ·  " +
+                "остання: ${i.optString("latest").take(7)}  —  " + if (i.optBoolean("upToDate")) "актуально" else "є оновлення",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        val ch = i.optJSONArray("changes")
+        if (ch != null && ch.length() > 0) {
+            Text("Що нового:", style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 6.dp))
+            for (k in ch.length() - 1 downTo 0) Text("• " + ch.optString(k), style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    log?.let { l ->
+        Spacer(Modifier.height(6.dp))
+        Surface(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = MaterialTheme.shapes.small) {
+            Text(l, style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                modifier = Modifier.fillMaxWidth().heightIn(max = 260.dp)
+                    .verticalScroll(androidx.compose.foundation.rememberScrollState(Int.MAX_VALUE)).padding(8.dp))
         }
     }
 }
