@@ -39,6 +39,16 @@ chown iothub:iothub "$DIR/VERSION.json"
 
 say "Оновлення й консоль з панелі"
 # служба оновлення: ставить версію, яку хаб записав у update-target (хаб може лише запустити її)
+cat > /usr/local/sbin/iot-hub-update <<'EOF'
+#!/bin/bash
+# Оновлення хаба до версії з /etc/iot-hub/update-target (її записує хаб на прохання панелі)
+T=$(tr -cd '0-9a-zA-Z._-' < /etc/iot-hub/update-target 2>/dev/null)
+T=${T:-dev}
+echo "Оновлення до $T — $(date)"
+curl -fsSL "https://raw.githubusercontent.com/AlexOn1803/iot-devices/$T/hub/install.sh" | IOTHUB_BRANCH="$T" bash
+echo "Код завершення: ${PIPESTATUS[1]}"
+EOF
+chmod 755 /usr/local/sbin/iot-hub-update
 cat > /etc/systemd/system/iot-hub-update.service <<'EOF'
 [Unit]
 Description=IoT Devices hub self-update
@@ -46,8 +56,8 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/bash -c 'T=$(tr -cd "0-9a-zA-Z._-" < /etc/iot-hub/update-target 2>/dev/null); T=${T:-dev}; echo "Оновлення до $T — $(date)"; curl -fsSL "https://raw.githubusercontent.com/AlexOn1803/iot-devices/$T/hub/install.sh" | IOTHUB_BRANCH="$T" bash; echo "Код завершення: $?"'
-StandardOutput=file:/var/log/iot-hub-update.log
+ExecStart=/usr/local/sbin/iot-hub-update
+StandardOutput=truncate:/var/log/iot-hub-update.log
 StandardError=inherit
 EOF
 touch /var/log/iot-hub-update.log && chmod 644 /var/log/iot-hub-update.log
