@@ -160,7 +160,7 @@ fun EspDeviceScreen(key: String, nav: Nav) {
             s.comps.filter { it.type != EspType.BUTTON && it.type != EspType.UNKNOWN }.forEach { c ->
                 EspCompCard(c, s) { send(it.put("i", c.i)) }
             }
-            if (s.comps.any { it.type == EspType.RELAY }) SchedulesCard(key)
+            if (s.comps.any { it.type in setOf(EspType.RELAY, EspType.PWM, EspType.WS2812, EspType.TUYA) }) SchedulesCard(key)
             Spacer(Modifier.height(24.dp))
         }
         }

@@ -299,16 +299,7 @@ internal fun SchedulesCard(deviceKey: String) {
     var editing by remember { mutableStateOf<Schedule?>(null) }
 
     val hubCfg by app.controller.hub.settings.collectAsState()
-    if (hubCfg.configured) {
-        SectionCard("Розклад") {
-            Text(
-                "Розклади виконує Raspberry Pi цілодобово. Додавай і змінюй їх у веб-панелі хаба — вкладка «Термостати й розклади» " +
-                    "(там же можна вибрати вихід плати: світло, стрічку тощо).",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        return
-    }
+    if (hubCfg.configured) { HubSchedulesCard(deviceKey); return }
     SectionCard("Розклад") {
         if (list.isEmpty()) {
             Text(
@@ -360,16 +351,29 @@ internal fun SchedulesCard(deviceKey: String) {
 }
 
 @Composable
-private fun ScheduleDialog(initial: Schedule, isNew: Boolean, onDismiss: () -> Unit, onSave: (Schedule) -> Unit, onDelete: () -> Unit) {
+internal fun ScheduleDialog(
+    initial: Schedule, isNew: Boolean, onDismiss: () -> Unit, onSave: (Schedule) -> Unit, onDelete: () -> Unit,
+    /** Виходи плати (індекс → назва): якщо не порожньо — показати вибір виходу. */
+    outputs: List<Pair<Int, String>> = emptyList(),
+    /** Розклад на платі потребує хоча б одного дня. */
+    requireDays: Boolean = false,
+) {
     val time = rememberTimePickerState(initial.hour, initial.minute, is24Hour = true)
     var days by remember { mutableIntStateOf(initial.days) }
     var turnOn by remember { mutableStateOf(initial.turnOn) }
+    var comp by remember { mutableIntStateOf(if (initial.comp >= 0) initial.comp else outputs.firstOrNull()?.first ?: -1) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (isNew) "Новий розклад" else "Розклад") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 TimePicker(time)
+                if (outputs.size > 1) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        outputs.forEach { (i, name) -> FilterChip(selected = comp == i, onClick = { comp = i }, label = { Text(name) }) }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                     SegmentedButton(selected = !turnOn, onClick = { turnOn = false }, shape = SegmentedButtonDefaults.itemShape(0, 2)) { Text("Вимкнути") }
                     SegmentedButton(selected = turnOn, onClick = { turnOn = true }, shape = SegmentedButtonDefaults.itemShape(1, 2)) { Text("Увімкнути") }
@@ -385,14 +389,19 @@ private fun ScheduleDialog(initial: Schedule, isNew: Boolean, onDismiss: () -> U
                     }
                 }
                 Text(
-                    if (days == 0) "Без днів — спрацює один раз" else formatDays(days),
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    when {
+                        days == 0 && requireDays -> "Для розкладу на платі вибери хоча б один день"
+                        days == 0 -> "Без днів — спрацює один раз"
+                        else -> formatDays(days)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (days == 0 && requireDays) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = {
-                onSave(initial.copy(hour = time.hour, minute = time.minute, days = days, turnOn = turnOn, enabled = true))
+            TextButton(enabled = !(requireDays && days == 0), onClick = {
+                onSave(initial.copy(hour = time.hour, minute = time.minute, days = days, turnOn = turnOn, enabled = true, comp = comp))
             }) { Text("Зберегти") }
         },
         dismissButton = {
