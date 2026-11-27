@@ -664,6 +664,10 @@ async function saveBoardPlan(key, comp, entry, removeId) {
   if (removeId) { const [, , ci, pi] = removeId.split(":"); const c = cfg.comps[Number(ci)]; if (c && c.plan) c.plan.splice(Number(pi), 1); }
   if (entry) { const c = cfg.comps[comp]; if (!c) throw new Error("Немає такого виходу на платі"); c.plan = (c.plan || []).concat([entry]); }
   await call("esp_config_set", { key, config: cfg }, 20000);
+  // перевірити, що плата справді прийняла розклад
+  const want = JSON.stringify(cfg.comps.map((c) => c.plan || []));
+  const back = await call("esp_config_get", { key }, 15000);
+  if (JSON.stringify((back.config.comps || []).map((c) => c.plan || [])) !== want) throw new Error("Плата не зберегла розклад — спробуй ще раз або онови прошивку плати");
 }
 
 function autoView() {

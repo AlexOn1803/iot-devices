@@ -167,6 +167,12 @@ async def main():
                                                           "sensorIndex": 1, "targetKey": esp_key, "mode": "HEAT", "onAt": 18, "offAt": 19}])
                 check("термостат збережено", a.get("ok"))
                 check("термостат на Pi увімкнув реле при 15 °C", await wait_for(lambda: BOARD["comps"][0]["on"], 25))
+
+                # видалили всі розклади в панелі — телефон зі старою копією не має їх повернути
+                await call("sched_set", schedules=[])
+                await call("sync", devices=[], schedules=[{"id": "old", "deviceKey": esp_key, "hour": 22, "minute": 0, "days": 31, "turnOn": False}])
+                saved = json.load(open(d + "/config.json"))
+                check("видалений розклад не повертається з телефона", saved.get("schedules") == [])
     finally:
         hub.terminate()
     print("\nALL OK" if ok else "\nFAILED")

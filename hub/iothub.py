@@ -780,8 +780,10 @@ class Hub:
                 self.cfg.data["inverter"] = msg["inverter"]
             # термостати й розклади з телефона лише переносяться на Pi, якщо там їх ще немає;
             # далі головні — ті, що в панелі хаба (інакше телефон затирав би зміни з панелі)
+            # (лише один раз: якщо в панелі все видалили — порожній список лишається порожнім,
+            #  а не відновлюється зі старої копії в телефоні)
             for k in ("thermostats", "schedules"):
-                if isinstance(msg.get(k), list) and msg[k] and not self.cfg.data.get(k):
+                if isinstance(msg.get(k), list) and msg[k] and k not in self.cfg.data:
                     self.cfg.data[k] = msg[k]
             if isinstance(msg.get("rules"), list):
                 self.rules.set_rules(msg["rules"])

@@ -1,4 +1,5 @@
 #pragma once
+#include <memory>
 // Відмінності між ESP8266 і сімейством ESP32 (класична, S2, S3, C3) в одному місці.
 
 #include <Arduino.h>
@@ -140,8 +141,27 @@ class KV {
   Preferences p;
  public:
   void begin() { p.begin("iot", false); }
-  String getString(const char* k, const String& def = "") { return p.getString(k, def); }
-  void putString(const char* k, const String& v) { p.putString(k, v); }
+  String getString(const char* k, const String& def = "") {
+    if (p.getType(k) == PT_BLOB) {
+      size_t n = p.getBytesLength(k);
+      std::unique_ptr<char[]> buf(new char[n + 1]);
+      p.getBytes(k, buf.get(), n);
+      buf[n] = 0;
+      return String(buf.get());
+    }
+    return p.getString(k, def);
+  }
+  // рядок у NVS обмежений ~4000 байт — довгі значення (конфіг плати з розкладами, ефектами)
+  // зберігаємо як blob, інакше запис мовчки не вдається і після перезавантаження повертається старе
+  void putString(const char* k, const String& v) {
+    if (v.length() >= 1500) {
+      if (p.getType(k) != PT_BLOB) p.remove(k);
+      p.putBytes(k, v.c_str(), v.length());
+    } else {
+      if (p.getType(k) == PT_BLOB) p.remove(k);
+      p.putString(k, v);
+    }
+  }
   uint32_t getUInt(const char* k, uint32_t def = 0) { return p.getUInt(k, def); }
   void putUInt(const char* k, uint32_t v) { p.putUInt(k, v); }
   void clear() { p.clear(); }

@@ -67,6 +67,8 @@ data class EspCompConfig(
     val pulse: Double = 0.0,
     /** Стрічка: які ефекти показувати й перебирати (порожньо — усі). */
     val fxset: List<String> = emptyList(),
+    /** Розклад виходу на самій платі (редагується в панелі хаба) — зберігаємо як є, щоб додаток його не стер. */
+    val plan: String = "",
 ) {
     fun toJson(): JSONObject {
         val o = JSONObject().put("t", type.code).put("name", name)
@@ -87,6 +89,7 @@ data class EspCompConfig(
                 .put("ver", tuyaVer).put("dp", tuyaDp)
             EspType.UNKNOWN -> {}
         }
+        if (plan.isNotEmpty()) runCatching { o.put("plan", JSONArray(plan)) }
         return o
     }
 
@@ -117,6 +120,7 @@ data class EspCompConfig(
                     ?: emptyList(),
                 pulse = o.optDouble("pulse", 0.0).takeIf { !it.isNaN() } ?: 0.0,
                 fxset = o.optJSONArray("fxset")?.let { a -> (0 until a.length()).map { a.optString(it) } } ?: emptyList(),
+                plan = o.optJSONArray("plan")?.toString() ?: "",
             )
         }
 
