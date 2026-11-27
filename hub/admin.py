@@ -122,6 +122,9 @@ class Admin:
                     "channel": self.data.get("channel", "beta")},
         }
 
+    async def on_hub_temp(self, msg):
+        return {"temp": cpu_temp()}
+
     async def on_admin_get(self, msg):
         return self.snapshot()
 

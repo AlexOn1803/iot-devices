@@ -96,6 +96,7 @@
 <div id="app" style="display:none">
   <header>
     <h1 id="title">IoT Хаб</h1>
+    <span class="pill" id="hubTemp" title="Температура процесора Raspberry Pi" style="display:none"></span>
     <span class="pill"><span id="conn" class="dot"></span><span id="connText">підключення…</span></span>
   </header>
   <nav class="tabs" id="tabs"></nav>
@@ -126,7 +127,7 @@ const daysText = (d) => !d ? "один раз" : d === 127 ? "щодня" : d ==
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws`);
-  ws.onopen = () => { setConn(true); };
+  ws.onopen = () => { setConn(true); setTimeout(pollHubTemp, 500); };
   ws.onclose = () => {
     setConn(false, "немає зв'язку");
     for (const p of pending.values()) p.reject(new Error("Зв'язок обірвався"));
@@ -150,12 +151,26 @@ function connect() {
     else if (m.t === "flash") flashProgress(m.text, m.pct);
     else if (m.t === "hub") {   // поза домом, через ретранслятор: чи на зв'язку сама Pi
       setConn(m.online, m.online ? null : "Raspberry Pi не на зв'язку");
-      if (m.online) ws.send(JSON.stringify({ t: "get" }));
+      if (m.online) { ws.send(JSON.stringify({ t: "get" })); setTimeout(pollHubTemp, 500); }
     }
   };
 }
 function setConn(ok, text) { $("conn").className = ok ? "dot ok" : "dot"; $("connText").textContent = text || (ok ? "хаб на зв'язку" : "немає зв'язку"); }
 setInterval(() => { if (ws && ws.readyState === 1) ws.send("ping"); }, 25000);
+// температура Raspberry Pi в шапці (як vcgencmd measure_temp)
+function showHubTemp(t) {
+  const el = $("hubTemp");
+  if (t == null) { el.style.display = "none"; return; }
+  el.style.display = "";
+  el.textContent = "🌡 " + Number(t).toFixed(1) + " °C";
+  el.style.color = t >= 75 ? "var(--err, #f66)" : t >= 65 ? "var(--warn)" : "";
+}
+async function pollHubTemp() {
+  if (ws && ws.readyState === 1 && $("connText").textContent === "хаб на зв'язку") {
+    try { showHubTemp((await call("hub_temp", {}, 8000)).temp); } catch (e) { /* хаб старої версії або нема зв'язку */ }
+  }
+}
+setInterval(pollHubTemp, 15000);
 function send(m) { if (ws && ws.readyState === 1) { m.id = reqId++; ws.send(JSON.stringify(m)); return true; } toast("Немає зв'язку з хабом"); return false; }
 function call(t, body = {}, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
@@ -812,7 +827,7 @@ function settingsView() {
 
     <div class="card"><h3>Консоль Raspberry Pi</h3>
       <div class="muted">Команди виконуються на Pi від користувача хаба${conRoot ? "" : " (без прав root)"}. Кожна команда записується в журнал хаба. ${conRoot ? "<b>Root дозволено</b> — вимкнути на Pi: <code>sudo iot-hub-console-root off</code>" : "Root (sudo) вмикається лише на самій Pi: <code>sudo iot-hub-console-root on</code>"}</div>
-      <div class="row" style="gap:6px">${[["Температура", "vcgencmd measure_temp"], ["Аптайм", "uptime"], ["Диск", "df -h /"], ["Пам'ять", "free -h"], ["Журнал хаба", "journalctl -u iot-hub -n 40 --no-pager"], ["Wi-Fi плат (MQTT)", "ss -tn state established '( sport = :1883 )'"], ["IP", "hostname -I"]].map(([l, c]) => `<button class="small" onclick="$('conCmd').value=${esc(JSON.stringify(c))};conRun()">${l}</button>`).join("")}</div>
+      <div class="row" style="gap:6px">${[["Температура", "vcgencmd measure_temp"], ["Аптайм", "uptime"], ["Диск", "df -h /"], ["Пам'ять", "free -h"], ["Журнал хаба", "journalctl -u iot-hub -n 40 --no-pager"], ["Wi-Fi плат (MQTT)", "ss -tn state established '( sport = :1883 )'"], ["IP", "hostname -I"], ["Ключі плат ESP", "python3 -c \"import json;[print(d.get('name'),'|',d.get('ip'),'|',d.get('apiKey')) for d in json.load(open('/etc/iot-hub/config.json'))['devices'] if d.get('kind')=='ESP']\""]].map(([l, c]) => `<button class="small" onclick="$('conCmd').value=${esc(JSON.stringify(c))};conRun()">${l}</button>`).join("")}</div>
       <div class="row"><input id="conCmd" style="flex:1;min-width:200px;font-family:ui-monospace,monospace" placeholder="напр.: ls -la /opt/iot-hub" onkeydown="if(event.key==='Enter')conRun()">
         <label class="c"><input type="checkbox" id="conRootCb" ${conRoot ? "" : "disabled"}> root</label><button class="primary" id="conBtn" onclick="conRun()">Виконати</button></div>
       ${conOut != null ? `<pre class="out" id="conOut">${esc(conOut)}</pre>` : ""}</div></div>`;
