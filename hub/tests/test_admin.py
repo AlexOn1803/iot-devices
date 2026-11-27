@@ -173,6 +173,25 @@ async def main():
                 await call("sync", devices=[], schedules=[{"id": "old", "deviceKey": esp_key, "hour": 22, "minute": 0, "days": 31, "turnOn": False}])
                 saved = json.load(open(d + "/config.json"))
                 check("видалений розклад не повертається з телефона", saved.get("schedules") == [])
+
+                # та сама плата додана і з панелі, і з телефона (інший ключ) — не дублюється
+                await call("sched_set", schedules=[{"id": "k1", "deviceKey": esp_key, "hour": 3, "minute": 0, "days": 1, "turnOn": True, "enabled": False}])
+                phone = {"key": "phone-esp", "kind": "ESP", "ip": "127.0.0.1:17810", "apiKey": BOARD["key"], "name": "Котельня", "deviceId": "fake01"}
+                await call("sync", devices=[phone])
+                saved = json.load(open(d + "/config.json"))
+                esps = [x for x in saved["devices"] if x.get("kind") == "ESP"]
+                check("та сама плата з телефона під іншим ключем не дублюється", len(esps) == 1 and esps[0]["key"] == "phone-esp")
+                check("посилання на плату переведено на ключ телефона", saved["schedules"][0]["deviceKey"] == "phone-esp")
+                await call("sync", devices=[phone])
+                saved = json.load(open(d + "/config.json"))
+                check("повторна синхронізація теж без дубліката", len([x for x in saved["devices"] if x.get("kind") == "ESP"]) == 1)
+
+                # видалили плату на хабі — телефон зі старою копією не повертає її, а прибирає в себе
+                await call("device_remove", key="phone-esp")
+                a = await call("sync", devices=[phone])
+                saved = json.load(open(d + "/config.json"))
+                check("видалена на хабі плата не повертається з телефона",
+                      not any(x.get("kind") == "ESP" for x in saved["devices"]) and "phone-esp" in (a.get("removed") or []))
     finally:
         hub.terminate()
     print("\nALL OK" if ok else "\nFAILED")

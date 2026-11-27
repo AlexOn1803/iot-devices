@@ -543,6 +543,9 @@ class Hub:
         self.version = VERSION
         self.started = time.time()
         self.mqtt = None
+        if self.dedupe_devices():
+            log.info("прибрано дублікати пристроїв")
+            self.cfg.save()
         self.apply_devices()
 
     @staticmethod
@@ -576,6 +579,88 @@ class Hub:
         for k in list(self.states):
             if k not in keep:
                 del self.states[k]
+
+    # ---- злиття пристроїв з телефона (без дублікатів)
+    @staticmethod
+    def same_device(a, b):
+        """Той самий фізичний пристрій під різними ключами (додано і з телефона, і з панелі)."""
+        ka = "ESP" if a.get("kind") == "ESP" else "TUYA"
+        if ka != ("ESP" if b.get("kind") == "ESP" else "TUYA"):
+            return False
+        ia, ib = str(a.get("deviceId") or ""), str(b.get("deviceId") or "")
+        if ia and ib:
+            return ia == ib
+        return ka == "ESP" and bool(a.get("ip")) and a.get("ip") == b.get("ip")
+
+    def rekey(self, old, new):
+        """Замінити ключ пристрою всюди в налаштуваннях (правила, розклади, плитки, термостати)."""
+        def walk(x):
+            if isinstance(x, dict):
+                return {(new if k == old else k): walk(v) for k, v in x.items()}
+            if isinstance(x, list):
+                return [walk(v) for v in x]
+            return new if x == old else x
+        devs = self.cfg.data.get("devices", [])
+        rest = walk({k: v for k, v in self.cfg.data.items() if k not in ("devices", "removedKeys")})
+        self.cfg.data.update(rest)
+        dash = self.cfg.data.get("dash") or {}
+        if isinstance(dash.get("order"), list):
+            dash["order"] = list(dict.fromkeys(dash["order"]))
+        for d in devs:
+            if d.get("key") == old:
+                d["key"] = new
+        if old in self.states:
+            self.states[new] = self.states.pop(old)
+
+    def dedupe_devices(self):
+        """Прибрати дублікати одного пристрою (лишається перший, посилання переводяться на нього)."""
+        out, dropped = [], []
+        for d in self.cfg.data.get("devices", []):
+            first = next((x for x in out if self.same_device(x, d)), None)
+            if first is None:
+                out.append(d)
+                continue
+            for k, v in d.items():
+                if k != "key" and v not in ("", None) and first.get(k) in ("", None):
+                    first[k] = v
+            dropped.append((d.get("key"), first.get("key")))
+        if not dropped:
+            return False
+        self.cfg.data["devices"] = out
+        for old, new in dropped:
+            if old and old != new:
+                self.rekey(old, new)
+        return True
+
+    def merge_devices(self, incoming):
+        """Пристрої з телефона: додати/оновити, але не створювати дублікат і не повертати видалені на хабі.
+        Повертає ключі, які телефон має прибрати в себе."""
+        devs = self.cfg.data.setdefault("devices", [])
+        gone = set(self.cfg.data.get("removedKeys") or [])
+        removed = []
+        for d in incoming:
+            if not isinstance(d, dict) or not d.get("key"):
+                continue
+            if d["key"] in gone:
+                removed.append(d["key"])
+                continue
+            i = next((i for i, x in enumerate(devs) if x.get("key") == d["key"]), None)
+            if i is not None:
+                devs[i] = dict(devs[i], **d)
+                continue
+            twin = next((x for x in devs if self.same_device(x, d)), None)
+            if twin is None:
+                devs.append(d)
+                continue
+            # той самий пристрій уже є на хабі під іншим ключем — беремо ключ телефона,
+            # а робочі налаштування хаба (IP, ключі доступу, назву) лишаємо
+            old = twin["key"]
+            for k, v in d.items():
+                if k != "key" and twin.get(k) in ("", None):
+                    twin[k] = v
+            self.rekey(old, d["key"])
+        self.dedupe_devices()
+        return removed
 
     # ---- дані пристроїв (для правил і панелі)
     def device(self, key):
@@ -766,16 +851,9 @@ class Hub:
         elif t == "sync":
             # хаб — головний: пристрої з додатка додаються/оновлюються, але не видаляються
             # (видалення — окремою командою device_remove); так новий телефон без пристроїв нічого не зітре
+            removed = []
             if isinstance(msg.get("devices"), list):
-                devs = self.cfg.data.setdefault("devices", [])
-                for d in msg["devices"]:
-                    if not isinstance(d, dict) or not d.get("key"):
-                        continue
-                    i = next((i for i, x in enumerate(devs) if x.get("key") == d["key"]), None)
-                    if i is None:
-                        devs.append(d)
-                    else:
-                        devs[i] = dict(devs[i], **d)
+                removed = self.merge_devices(msg["devices"])
             if msg.get("inverter"):
                 self.cfg.data["inverter"] = msg["inverter"]
             # термостати й розклади з телефона лише переносяться на Pi, якщо там їх ще немає;
@@ -789,7 +867,8 @@ class Hub:
                 self.rules.set_rules(msg["rules"])
             self.cfg.save()
             self.apply_devices()
-            await reply({"t": "ack", "id": msg.get("id"), "ok": True})
+            # removed — пристрої, які видалили на хабі: телефон прибирає їх у себе, а не додає знову
+            await reply({"t": "ack", "id": msg.get("id"), "ok": True, "removed": removed})
             self.broadcast(self.hello())
             await reply(self.snapshot())
             self.broadcast(self.rules_msg())

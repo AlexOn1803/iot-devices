@@ -158,6 +158,10 @@ class Admin:
 
     async def on_device_remove(self, msg):
         key = msg.get("key", "")
+        if any(x.get("key") == key for x in self.data.get("devices", [])):
+            # запам'ятати, щоб телефон зі старою копією не додав його знову під час синхронізації
+            gone = [k for k in (self.data.get("removedKeys") or []) if k != key]
+            self.data["removedKeys"] = (gone + [key])[-200:]
         self.data["devices"] = [x for x in self.data.get("devices", []) if x.get("key") != key]
         dash = self.data.get("dash") or {}
         if isinstance(dash.get("order"), list):

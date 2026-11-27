@@ -148,7 +148,15 @@ class PlugController(
         val sig = msg.toString()
         if (sig == lastSync) return
         scope.launch {
-            hub.request(JSONObject(sig)).onSuccess { lastSync = sig }
+            hub.request(JSONObject(sig)).onSuccess { ack ->
+                lastSync = sig
+                // пристрої, які видалили на хабі (у веб-панелі), прибираємо й у телефоні — інакше вони б поверталися
+                val gone = ack.optJSONArray("removed") ?: return@onSuccess
+                for (i in 0 until gone.length()) {
+                    val k = gone.optString(i)
+                    if (storage.device(k) != null) { release(k); storage.removeDevice(k, tellHub = false) }
+                }
+            }
         }
     }
 

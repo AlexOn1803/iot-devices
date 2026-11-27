@@ -127,9 +127,9 @@ class Storage(context: Context) {
     }
 
     @Synchronized
-    fun removeDevice(key: String) {
+    fun removeDevice(key: String, tellHub: Boolean = true) {
         // хаб не видаляє пристрої під час синхронізації — кажемо йому окремо
-        runCatching {
+        if (tellHub) runCatching {
             ua.madeisy.iot.IotApp.instance.controller.hub.send(org.json.JSONObject().put("t", "device_remove").put("key", key))
         }
         saveDevices(_devices.value.filterNot { it.key == key })
