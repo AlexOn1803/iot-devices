@@ -647,6 +647,8 @@ class Admin:
         root = bool(msg.get("root"))
         if root and not self._root_allowed():
             raise PermissionError("Root вимкнено. Дозволити можна лише на самій Pi: sudo iot-hub-console-root on")
+        if re.search(r"hub/install\.sh|systemctl\s+(restart|stop)\s+iot-hub\b", cmd):
+            raise ValueError("Ця команда перезапускає хаб і обірветься разом з консоллю. Для оновлення — кнопка «Оновити хаб» вище.")
         log.warning("console%s: %s", " (root)" if root else "", cmd)
         argv = (["sudo", "-n", "/bin/bash", "-c", cmd] if root else ["/bin/bash", "-c", cmd])
         p = await asyncio.create_subprocess_exec(*argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
@@ -657,7 +659,7 @@ class Admin:
         except asyncio.TimeoutError:
             p.kill()
             out, code = "(час вийшов — команду зупинено)".encode(), -1
-        text = out.decode(errors="replace")
+        text = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", out.decode(errors="replace"))   # кольори терміналу
         if len(text) > 60000:
             text = "…\n" + text[-60000:]
         return {"out": text, "code": code, "rootAllowed": self._root_allowed()}
