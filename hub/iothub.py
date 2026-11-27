@@ -612,18 +612,24 @@ class Hub:
         if old in self.states:
             self.states[new] = self.states.pop(old)
 
-    def dedupe_devices(self):
-        """Прибрати дублікати одного пристрою (лишається перший, посилання переводяться на нього)."""
+    def dedupe_devices(self, both_ok=()):
+        """Прибрати дублікати одного пристрою (лишається перший, посилання переводяться на нього).
+        both_ok — ключі, які телефон щойно надіслав окремими пристроями: їх між собою не зливаємо."""
         out, dropped = [], []
         for d in self.cfg.data.get("devices", []):
-            first = next((x for x in out if self.same_device(x, d)), None)
+            first = next((x for x in out if self.same_device(x, d)
+                          and not (x.get("key") in both_ok and d.get("key") in both_ok)), None)
             if first is None:
                 out.append(d)
                 continue
-            for k, v in d.items():
-                if k != "key" and v not in ("", None) and first.get(k) in ("", None):
-                    first[k] = v
-            dropped.append((d.get("key"), first.get("key")))
+            keep, drop = first, d
+            if d.get("key") in both_ok and first.get("key") not in both_ok:
+                keep, drop = d, first          # лишаємо ключ, яким користується телефон
+                out[out.index(first)] = d
+            for k, v in drop.items():
+                if k != "key" and v not in ("", None) and keep.get(k) in ("", None):
+                    keep[k] = v
+            dropped.append((drop.get("key"), keep.get("key")))
         if not dropped:
             return False
         self.cfg.data["devices"] = out
@@ -637,6 +643,7 @@ class Hub:
         Повертає ключі, які телефон має прибрати в себе."""
         devs = self.cfg.data.setdefault("devices", [])
         gone = set(self.cfg.data.get("removedKeys") or [])
+        sent = {d.get("key") for d in incoming if isinstance(d, dict)}
         removed = []
         for d in incoming:
             if not isinstance(d, dict) or not d.get("key"):
@@ -648,7 +655,7 @@ class Hub:
             if i is not None:
                 devs[i] = dict(devs[i], **d)
                 continue
-            twin = next((x for x in devs if self.same_device(x, d)), None)
+            twin = next((x for x in devs if x.get("key") not in sent and self.same_device(x, d)), None)
             if twin is None:
                 devs.append(d)
                 continue
@@ -659,7 +666,7 @@ class Hub:
                 if k != "key" and twin.get(k) in ("", None):
                     twin[k] = v
             self.rekey(old, d["key"])
-        self.dedupe_devices()
+        self.dedupe_devices(both_ok=sent)
         return removed
 
     # ---- дані пристроїв (для правил і панелі)
